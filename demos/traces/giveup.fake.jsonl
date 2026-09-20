@@ -1,0 +1,28 @@
+{"seq": 1, "ts": 1789909990.21, "session": "a584b94a183c", "kind": "session_start", "model": "fake-llm(scripted)", "tools": ["bash", "edit_file", "find_files", "read_file", "run_tests", "search_text", "write_file", "write_todos"], "config": {"base_url": "http://fake.invalid/v1", "model": "fake-llm(scripted)", "api_key": "***", "project_root": "C:\\Users\\czx\\AppData\\Local\\Temp\\pytest-of-czx\\pytest-88\\test_demo_passes_without_a_net4\\.work\\giveup", "max_turns": 6, "max_tokens": 4096, "max_total_tokens": 800000, "trace_path": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\demos\\traces\\giveup.fake.jsonl"}}
+{"seq": 2, "ts": 1789909990.211, "session": "a584b94a183c", "kind": "run_start", "user_input_chars": 56}
+{"seq": 3, "ts": 1789909990.211, "session": "a584b94a183c", "kind": "turn_start", "turn": 1, "message_count": 1}
+{"seq": 4, "ts": 1789909990.211, "session": "a584b94a183c", "kind": "llm_response", "turn": 1, "stop_reason": "tool_use", "blocks": ["ToolUseBlock"], "usage": {"prompt": 0, "completion": 0}}
+{"seq": 5, "ts": 1789909990.212, "session": "a584b94a183c", "kind": "permission", "turn": 1, "tool": "write_todos", "decision": "只读工具，自动放行"}
+{"seq": 6, "ts": 1789909990.212, "session": "a584b94a183c", "kind": "tool_call", "turn": 1, "name": "write_todos", "args": {"todos": "[{\"content\": \"跑测试确认红的是哪一条\", \"status\": \"in_progress\"}, {\"content\": \"把 DEFAULT_TIMEOUT 对齐文档口径\", \"status\": \"pending\"}]"}, "ok": true, "output_chars": 63, "latency": 0.0}
+{"seq": 7, "ts": 1789909990.212, "session": "a584b94a183c", "kind": "todo_update", "turn": 1, "items": [{"content": "跑测试确认红的是哪一条", "status": "in_progress"}, {"content": "把 DEFAULT_TIMEOUT 对齐文档口径", "status": "pending"}]}
+{"seq": 8, "ts": 1789909990.213, "session": "a584b94a183c", "kind": "turn_start", "turn": 2, "message_count": 3}
+{"seq": 9, "ts": 1789909990.213, "session": "a584b94a183c", "kind": "llm_response", "turn": 2, "stop_reason": "tool_use", "blocks": ["TextBlock", "ToolUseBlock"], "usage": {"prompt": 0, "completion": 0}}
+{"seq": 10, "ts": 1789909990.213, "session": "a584b94a183c", "kind": "permission", "turn": 2, "tool": "run_tests", "decision": "非交互模式，工作区内自动放行"}
+{"seq": 11, "ts": 1789909991.056, "session": "a584b94a183c", "kind": "tool_call", "turn": 2, "name": "run_tests", "args": {"target": ""}, "ok": true, "output_chars": 750, "latency": 0.842}
+{"seq": 12, "ts": 1789909991.056, "session": "a584b94a183c", "kind": "turn_start", "turn": 3, "message_count": 5}
+{"seq": 13, "ts": 1789909991.057, "session": "a584b94a183c", "kind": "llm_response", "turn": 3, "stop_reason": "tool_use", "blocks": ["TextBlock", "ToolUseBlock"], "usage": {"prompt": 0, "completion": 0}}
+{"seq": 14, "ts": 1789909991.057, "session": "a584b94a183c", "kind": "permission", "turn": 3, "tool": "edit_file", "decision": "非交互模式，工作区内自动放行"}
+{"seq": 15, "ts": 1789909991.059, "session": "a584b94a183c", "kind": "tool_call", "turn": 3, "name": "edit_file", "args": {"path": "app/settings.py", "old_string": "DEFAULT_TIMEOUT = 30", "new_string": "DEFAULT_TIMEOUT = 60"}, "ok": true, "output_chars": 33, "latency": 0.001}
+{"seq": 16, "ts": 1789909991.059, "session": "a584b94a183c", "kind": "turn_start", "turn": 4, "message_count": 7}
+{"seq": 17, "ts": 1789909991.06, "session": "a584b94a183c", "kind": "llm_response", "turn": 4, "stop_reason": "tool_use", "blocks": ["ToolUseBlock"], "usage": {"prompt": 0, "completion": 0}}
+{"seq": 18, "ts": 1789909991.06, "session": "a584b94a183c", "kind": "permission", "turn": 4, "tool": "run_tests", "decision": "非交互模式，工作区内自动放行"}
+{"seq": 19, "ts": 1789909991.881, "session": "a584b94a183c", "kind": "tool_call", "turn": 4, "name": "run_tests", "args": {"target": ""}, "ok": true, "output_chars": 748, "latency": 0.821}
+{"seq": 20, "ts": 1789909991.881, "session": "a584b94a183c", "kind": "turn_start", "turn": 5, "message_count": 9}
+{"seq": 21, "ts": 1789909991.881, "session": "a584b94a183c", "kind": "llm_response", "turn": 5, "stop_reason": "tool_use", "blocks": ["TextBlock", "ToolUseBlock"], "usage": {"prompt": 0, "completion": 0}}
+{"seq": 22, "ts": 1789909991.882, "session": "a584b94a183c", "kind": "permission", "turn": 5, "tool": "edit_file", "decision": "非交互模式，工作区内自动放行"}
+{"seq": 23, "ts": 1789909991.883, "session": "a584b94a183c", "kind": "tool_call", "turn": 5, "name": "edit_file", "args": {"path": "app/settings.py", "old_string": "DEFAULT_TIMEOUT = 60", "new_string": "DEFAULT_TIMEOUT = 30"}, "ok": true, "output_chars": 33, "latency": 0.001}
+{"seq": 24, "ts": 1789909991.884, "session": "a584b94a183c", "kind": "turn_start", "turn": 6, "message_count": 11}
+{"seq": 25, "ts": 1789909991.884, "session": "a584b94a183c", "kind": "llm_response", "turn": 6, "stop_reason": "tool_use", "blocks": ["ToolUseBlock"], "usage": {"prompt": 0, "completion": 0}}
+{"seq": 26, "ts": 1789909991.884, "session": "a584b94a183c", "kind": "permission", "turn": 6, "tool": "run_tests", "decision": "非交互模式，工作区内自动放行"}
+{"seq": 27, "ts": 1789909992.739, "session": "a584b94a183c", "kind": "tool_call", "turn": 6, "name": "run_tests", "args": {"target": ""}, "ok": true, "output_chars": 750, "latency": 0.855}
+{"seq": 28, "ts": 1789909992.74, "session": "a584b94a183c", "kind": "run_end", "termination": "max_turns", "turn": 6, "usage": {"prompt": 0, "completion": 0, "total": 0}, "context_peak_tokens": 0, "tool_calls": 6, "tool_errors": 0, "redundant_calls": 0, "denied_actions": 0, "status": "aborted"}

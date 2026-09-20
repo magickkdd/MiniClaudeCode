@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.env
+.traces/
+.pytest_cache/
+.coverage
+# demo 的工作副本是跑出来的临时物；证据在 demos/results/，要提交
+demos/.work/

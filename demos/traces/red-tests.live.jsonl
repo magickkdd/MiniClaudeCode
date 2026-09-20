@@ -1,0 +1,35 @@
+{"seq": 1, "ts": 1789906651.626, "session": "ffafdacfc8a3", "kind": "session_start", "model": "agnes-2.5-flash", "tools": ["bash", "edit_file", "find_files", "read_file", "run_tests", "search_text", "write_file", "write_todos"], "config": {"base_url": "https://api.agnes-ai.cn/v1", "model": "agnes-2.5-flash", "api_key": "***", "project_root": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\demos\\.work\\red-tests", "max_turns": 20, "max_tokens": 4096, "max_total_tokens": 800000, "trace_path": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\demos\\traces\\red-tests.live.jsonl"}}
+{"seq": 2, "ts": 1789906651.627, "session": "ffafdacfc8a3", "kind": "run_start", "user_input_chars": 59}
+{"seq": 3, "ts": 1789906651.628, "session": "ffafdacfc8a3", "kind": "turn_start", "turn": 1, "message_count": 1}
+{"seq": 4, "ts": 1789906653.737, "session": "ffafdacfc8a3", "kind": "llm_response", "turn": 1, "stop_reason": "tool_use", "blocks": ["ToolUseBlock", "ToolUseBlock", "ToolUseBlock", "ToolUseBlock"], "usage": {"prompt": 2889, "completion": 148}}
+{"seq": 5, "ts": 1789906653.737, "session": "ffafdacfc8a3", "kind": "permission", "turn": 1, "tool": "bash", "decision": "非交互模式，工作区内自动放行"}
+{"seq": 6, "ts": 1789906654.504, "session": "ffafdacfc8a3", "kind": "tool_call", "turn": 1, "name": "bash", "args": {"command": "cd \"D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\demos\\.work\\red-tests\" && python -m pytest 2>&1 | tail -80"}, "ok": true, "output_chars": 1431, "latency": 0.766}
+{"seq": 7, "ts": 1789906654.504, "session": "ffafdacfc8a3", "kind": "permission", "turn": 1, "tool": "read_file", "decision": "只读工具，自动放行"}
+{"seq": 8, "ts": 1789906654.505, "session": "ffafdacfc8a3", "kind": "tool_call", "turn": 1, "name": "read_file", "args": {"path": "cart/__init__.py"}, "ok": true, "output_chars": 386, "latency": 0.001}
+{"seq": 9, "ts": 1789906654.506, "session": "ffafdacfc8a3", "kind": "permission", "turn": 1, "tool": "read_file", "decision": "只读工具，自动放行"}
+{"seq": 10, "ts": 1789906654.507, "session": "ffafdacfc8a3", "kind": "tool_call", "turn": 1, "name": "read_file", "args": {"path": "cart/pricing.py"}, "ok": true, "output_chars": 2518, "latency": 0.001}
+{"seq": 11, "ts": 1789906654.507, "session": "ffafdacfc8a3", "kind": "permission", "turn": 1, "tool": "read_file", "decision": "只读工具，自动放行"}
+{"seq": 12, "ts": 1789906654.508, "session": "ffafdacfc8a3", "kind": "tool_call", "turn": 1, "name": "read_file", "args": {"path": "cart/report.py"}, "ok": true, "output_chars": 530, "latency": 0.001}
+{"seq": 13, "ts": 1789906654.508, "session": "ffafdacfc8a3", "kind": "turn_start", "turn": 2, "message_count": 3}
+{"seq": 14, "ts": 1789906658.996, "session": "ffafdacfc8a3", "kind": "llm_response", "turn": 2, "stop_reason": "tool_use", "blocks": ["ToolUseBlock", "ToolUseBlock"], "usage": {"prompt": 4718, "completion": 54}}
+{"seq": 15, "ts": 1789906658.996, "session": "ffafdacfc8a3", "kind": "permission", "turn": 2, "tool": "read_file", "decision": "只读工具，自动放行"}
+{"seq": 16, "ts": 1789906658.997, "session": "ffafdacfc8a3", "kind": "tool_call", "turn": 2, "name": "read_file", "args": {"path": "tests/test_checkout.py"}, "ok": true, "output_chars": 1741, "latency": 0.001}
+{"seq": 17, "ts": 1789906658.998, "session": "ffafdacfc8a3", "kind": "permission", "turn": 2, "tool": "read_file", "decision": "只读工具，自动放行"}
+{"seq": 18, "ts": 1789906658.999, "session": "ffafdacfc8a3", "kind": "tool_call", "turn": 2, "name": "read_file", "args": {"path": "README.md"}, "ok": true, "output_chars": 857, "latency": 0.002}
+{"seq": 19, "ts": 1789906659.0, "session": "ffafdacfc8a3", "kind": "turn_start", "turn": 3, "message_count": 5}
+{"seq": 20, "ts": 1789906660.056, "session": "ffafdacfc8a3", "kind": "llm_response", "turn": 3, "stop_reason": "tool_use", "blocks": ["ToolUseBlock"], "usage": {"prompt": 5948, "completion": 103}}
+{"seq": 21, "ts": 1789906660.057, "session": "ffafdacfc8a3", "kind": "permission", "turn": 3, "tool": "edit_file", "decision": "非交互模式，工作区内自动放行"}
+{"seq": 22, "ts": 1789906660.058, "session": "ffafdacfc8a3", "kind": "tool_call", "turn": 3, "name": "edit_file", "args": {"new_string": "COUPONS = {\"BULK10\": 0.1, \"WELCOME\": 0.05}", "old_string": "COUPONS = {\"BULK10\": 0.01, \"WELCOME\": 0.05}", "path": "cart/pricing.py"}, "ok": true, "output_chars": 33, "latency": 0.001}
+{"seq": 23, "ts": 1789906660.059, "session": "ffafdacfc8a3", "kind": "turn_start", "turn": 4, "message_count": 7}
+{"seq": 24, "ts": 1789906660.687, "session": "ffafdacfc8a3", "kind": "llm_response", "turn": 4, "stop_reason": "tool_use", "blocks": ["ToolUseBlock"], "usage": {"prompt": 6084, "completion": 15}}
+{"seq": 25, "ts": 1789906660.688, "session": "ffafdacfc8a3", "kind": "permission", "turn": 4, "tool": "run_tests", "decision": "非交互模式，工作区内自动放行"}
+{"seq": 26, "ts": 1789906661.539, "session": "ffafdacfc8a3", "kind": "tool_call", "turn": 4, "name": "run_tests", "args": {}, "ok": true, "output_chars": 752, "latency": 0.851}
+{"seq": 27, "ts": 1789906661.54, "session": "ffafdacfc8a3", "kind": "turn_start", "turn": 5, "message_count": 9}
+{"seq": 28, "ts": 1789906664.209, "session": "ffafdacfc8a3", "kind": "llm_response", "turn": 5, "stop_reason": "tool_use", "blocks": ["ToolUseBlock", "ToolUseBlock"], "usage": {"prompt": 6333, "completion": 236}}
+{"seq": 29, "ts": 1789906664.21, "session": "ffafdacfc8a3", "kind": "permission", "turn": 5, "tool": "edit_file", "decision": "非交互模式，工作区内自动放行"}
+{"seq": 30, "ts": 1789906664.211, "session": "ffafdacfc8a3", "kind": "tool_call", "turn": 5, "name": "edit_file", "args": {"new_string": "def checkout(cart: Cart, coupon: str = \"\") -> Order:\n    subtotal = cart.subtotal\n    discount = discount_for(subtotal, coupon)\n    tax = round(taxable_amount(subtotal, discount) * TAX_RATE, 2)\n    re…(329 chars)", "old_string": "def checkout(cart: Cart, coupon: str = \"\") -> Order:\n    subtotal = cart.subtotal\n    discount = discount_for(subtotal, coupon)\n    tax = round(subtotal * TAX_RATE, 2)\n    return Order(\n        subtot…(303 chars)", "path": "cart/pricing.py"}, "ok": true, "output_chars": 33, "latency": 0.001}
+{"seq": 31, "ts": 1789906664.212, "session": "ffafdacfc8a3", "kind": "permission", "turn": 5, "tool": "run_tests", "decision": "非交互模式，工作区内自动放行"}
+{"seq": 32, "ts": 1789906665.122, "session": "ffafdacfc8a3", "kind": "tool_call", "turn": 5, "name": "run_tests", "args": {}, "ok": true, "output_chars": 42, "latency": 0.91}
+{"seq": 33, "ts": 1789906665.122, "session": "ffafdacfc8a3", "kind": "turn_start", "turn": 6, "message_count": 11}
+{"seq": 34, "ts": 1789906666.593, "session": "ffafdacfc8a3", "kind": "llm_response", "turn": 6, "stop_reason": "end_turn", "blocks": ["TextBlock"], "usage": {"prompt": 6636, "completion": 119}}
+{"seq": 35, "ts": 1789906666.593, "session": "ffafdacfc8a3", "kind": "run_end", "termination": "completed", "turn": 6, "usage": {"prompt": 32608, "completion": 675, "total": 33283}, "context_peak_tokens": 6636, "tool_calls": 10, "tool_errors": 0, "redundant_calls": 0, "denied_actions": 0, "status": "finished"}
