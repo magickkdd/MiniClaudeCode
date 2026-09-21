@@ -482,12 +482,23 @@ mini-claude-code/
 - **循环模拟器**：带动画的 Agent 执行流程演示
 - **交互式学习**：通过游戏化方式理解核心概念
 
-### 13.3 使用方式
+### 13.3 动漫可视化学习技能
+
+[`anime-visual-learning-skill`](https://github.com/magickkdd/anime-visual-learning-skill) 提供动漫风格的可视化学习体验：
+- **直接点击链接学习**：下载 zip 后解压，打开 HTML 文件即可开始
+- **动漫角色引导**：通过二次元角色讲解 MiniClaudeCode 的核心概念
+- **交互式练习**：游戏化的学习方式，边玩边学
+
+### 13.4 使用方式
 
 ```bash
-# 在浏览器中打开
+# 本地可视化学习材料
 start review/miniclaude-interview-guide.html
 start review/mmc-academy.html
+
+# 在线动漫学习技能
+# 访问 https://github.com/magickkdd/anime-visual-learning-skill
+# 下载 anime-visual-learning.zip 并解压
 ```
 
-这些页面完全离线可用，无需服务器或网络连接。
+所有可视化页面完全离线可用，无需服务器或网络连接。
