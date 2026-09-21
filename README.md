@@ -459,3 +459,35 @@ mini-claude-code/
 3. **多语言 `run_tests`**：把 pytest 特化换成检测器 + 命令模板，工具层已经与语言无关，缺的只是配置。
 4. **A1 换成真实开源仓库**：解禁网络后重跑，同时把仓库地图换成可持久化的 `repo_map`。
 5. **VLM / 多 Agent / RL**：等 A1–A4 在真仓库上有稳定通过率再谈，现在加进去只会掩盖工程闭环的缺口。
+
+---
+
+## 13. 可视化学习材料
+
+项目包含交互式可视化学习页面，帮助理解 MiniClaudeCode 的架构和机制。
+
+### 13.1 面试通关之旅
+
+`review/miniclaude-interview-guide.html` 包含：
+- **架构可视化**：交互式展示 CLI → Agent → Tools/LLM 三层架构
+- **循环动画**：Ask → Act → Observe 循环的实时演示
+- **烧钱模拟器**：模拟轮数/token/上下文/停滞四种止损机制
+- **权限攻防**：五级闸门的交互式演示
+- **刷题闯关**：110 道面试题的翻卡游戏
+
+### 13.2 美少女学园
+
+`review/mmc-academy.html` 包含：
+- **工具角色化**：8 个工具以二次元角色形式呈现
+- **循环模拟器**：带动画的 Agent 执行流程演示
+- **交互式学习**：通过游戏化方式理解核心概念
+
+### 13.3 使用方式
+
+```bash
+# 在浏览器中打开
+start review/miniclaude-interview-guide.html
+start review/mmc-academy.html
+```
+
+这些页面完全离线可用，无需服务器或网络连接。
