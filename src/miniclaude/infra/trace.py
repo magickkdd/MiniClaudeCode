@@ -185,6 +185,23 @@ def replay(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def fingerprint(path: Path) -> dict[str, Any]:
+    """一份轨迹的内容指纹：非空行数 + 字节数 + 全文 sha256 的前 16 位。
+
+    SPEC v2 §7.3-7 要的东西：「manifest 那行判据所依据的那份轨迹」这件事得有个可校验的
+    凭据。规格原文写的是"行数 + **末行**哈希"，这里换成全文件哈希 —— 末行哈希查不出中间行
+    被改过（缺口 ① 点名的正是"手工改动"），而为了数行数本来就要把文件整个读一遍，
+    多算一次哈希的边际成本是 0。截到 16 个十六进制位 = 64 比特：要挡的是覆盖与手改，
+    不是有意的伪造。
+    """
+    raw = Path(path).read_bytes()
+    return {
+        "lines": sum(1 for line in raw.splitlines() if line.strip()),
+        "bytes": len(raw),
+        "sha": hashlib.sha256(raw).hexdigest()[:16],
+    }
+
+
 def of_session(records: list[dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
     return [record for record in records if record.get("session") == session_id]
 

@@ -5,7 +5,8 @@
 
 * 判绿靠的是 gold patch 真把用例翻绿了 —— 不是剧本声称成功；
 * 工作副本隔离，基线目录跑一百次也不动；
-* manifest 逐条落盘、可续跑，哈希对不上的记录**不复用**；
+* manifest 逐条落盘、可续跑，哈希对不上的记录**不复用**；每一行还带着所属 trace 的内容
+  指纹与批次内相对路径（§7.3-7），所以"判据配的是哪份轨迹"这件事不依赖这台机器的坐标；
 * 批次预算到点就停，并在报表里留下 `aborted_batch`；
 * 篡改考卷（改测试让测试变绿）必须判 fail。
 
@@ -15,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,7 @@ from miniclaude.eval.contract import tree_hash
 from miniclaude.eval.regression import instrument_checks
 from miniclaude.eval.runner import BatchReport, EvalRunner, RunRecord
 from miniclaude.eval.taskset import TaskSet
+from miniclaude.infra.trace import fingerprint
 
 BUGGY = "def add(a, b):\n    return a - b\n\n\ndef sub(a, b):\n    return a - b\n"
 FIXED = "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
@@ -270,6 +273,45 @@ def test_rerunning_a_run_supersedes_its_manifest_row(repo: Path, tmp_path: Path)
 
     # 取代之后续跑才认得这份现场：旧行若不删，resume 会以为 9 轮那次失败还在账上。
     report = runner_for(repo, tmp_path / "out", repeats=1).run()
+    assert report.summary["resumed"] == 1
+    assert verdicts_of(report) == {"toy-fix": "pass"}
+
+
+# ---------------------------------------------------------------- 同一性：这行判据配这份轨迹
+
+
+def test_manifest_rows_carry_a_fingerprint_of_the_trace_they_judge(repo: Path, tmp_path: Path) -> None:
+    """取代旧行只解决"指向哪一份"；指纹才解决"就是那一份"（SPEC v2 §7.3-7）。
+
+    断言全部从**盘上重算**，不拿跑批器自己算的那份跟自己对：那等于让被考核者填表。
+    """
+    write_task(repo, task_json())
+    out = tmp_path / "out"
+    runner_for(repo, out, repeats=1).run()
+    row = json.loads((out / "manifest.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    stamp = row["trace_fp"]
+    trace = out / stamp["rel"]
+    assert trace.is_file(), "相对路径要能脱离这台机器拼回同一份文件"
+    live = fingerprint(trace)
+    assert (stamp["sha"], stamp["lines"], stamp["bytes"]) == (live["sha"], live["lines"], live["bytes"])
+
+
+def test_resume_finds_the_trace_after_the_batch_directory_moves(repo: Path, tmp_path: Path) -> None:
+    """`eval/.work/` 不进版本库，批次会被拷走。绝对路径指空不等于数据没了（缺口 ②）。"""
+    write_task(repo, task_json())
+    out = tmp_path / "out"
+    runner_for(repo, out, repeats=1).run()
+    moved = tmp_path / "moved"
+    shutil.move(str(out), str(moved))
+
+    record = runner_for(repo, moved, repeats=1).load_manifest()[("toy-fix", 0)]
+    assert record.trace_path == moved / "traces" / "toy-fix.r0.fake.jsonl", (
+        f"还留着旧坐标 {record.trace_path}：那份路径在这个目录下已经不存在了"
+    )
+    assert record.trace_path.is_file()
+
+    # 换了坐标也要能接着续跑：认得现场靠的是 (task, repeat) 与哈希，不是绝对路径。
+    report = runner_for(repo, moved, repeats=1).run()
     assert report.summary["resumed"] == 1
     assert verdicts_of(report) == {"toy-fix": "pass"}
 

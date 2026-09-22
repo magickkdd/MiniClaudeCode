@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +25,11 @@ from miniclaude.eval.export_rl import (
     find_snapshot,
     pair_snapshot,
     preference_pairs,
+    read_batches,
     steps_from,
 )
-from miniclaude.eval.runner import RunRecord
+from miniclaude.eval.runner import RunRecord, trace_stamp
+from miniclaude.infra.trace import fingerprint
 from miniclaude.messages import Message, Role, TextBlock, ToolResultBlock, ToolUseBlock
 
 SECRET = "sk-abcdefghijklmnop"
@@ -419,6 +422,117 @@ def test_ledger_counts_add_up_with_inputs(tmp_path: Path) -> None:
     assert {row["task_id"] for row in rows} == {"a"}
 
 
+# --------------------------------------------------------------- 判据与轨迹的同一性（§7.3-7）
+
+
+def stamped(trace: Path, root: Path, **kwargs: Any) -> RunRecord:
+    """一条**带内容指纹**的判据行 —— §7.3-7 之后新批次就是这个形状。"""
+    record = run_record(trace, **kwargs)
+    record.trace_fp = trace_stamp(trace, root)
+    assert record.trace_fp, "指纹没盖上，下面的用例就全在验一个空对象"
+    return record
+
+
+def test_a_stamped_run_is_joined_and_says_so(tmp_path: Path) -> None:
+    trace = write_trace(tmp_path, trace_records())
+    rows, ledger = export_one(tmp_path, [stamped(trace, tmp_path)])
+    assert ledger == []
+    assert {row["provenance"]["trace_identity"]["status"] for row in rows} == {"verified"}
+    first = rows[0]["provenance"]["trace_identity"]
+    assert first["sha"] == fingerprint(trace)["sha"]
+    assert first["rel"] == "traces/demo.r0.fake.jsonl", "相对路径要能脱离这台机器拼回去"
+
+
+def test_a_mutated_trace_is_dropped_not_joined(tmp_path: Path) -> None:
+    """轮数校验挡得住"少了几轮"，挡不住"同样轮数的另一份轨迹"。"""
+    trace = write_trace(tmp_path, trace_records())
+    record = stamped(trace, tmp_path)
+    before = fingerprint(trace)
+    trace.write_text(trace.read_text(encoding="utf-8") + json.dumps({"kind": "error", "session": "sess0001", "turn": 9}) + "\n", encoding="utf-8")
+    rows, ledger = export_one(tmp_path, [record])
+    assert rows == [], "指纹已经对不上了，这一行的 reward 属于另一条轨迹"
+    assert ledger[0]["code"] == "trace-drift"
+    assert ledger[0]["recorded_lines"] == before["lines"]
+    assert ledger[0]["disk_lines"] == before["lines"] + 1
+    assert ledger[0]["recorded_sha"] != ledger[0]["disk_sha"]
+
+
+def test_an_edited_middle_line_is_drift_too(tmp_path: Path) -> None:
+    """SPEC 原文要的是"行数 + 末行哈希"，这里换成全文件哈希就是为了这一条。
+
+    改中间一行（把某轮的 `prefix_hash` 或 `est_tokens` 涂掉）行数不变、末行不变，
+    末行哈希那份凭据会照样点头 —— 而它要挡的"手工改动"恰恰长这样。
+    """
+    trace = write_trace(tmp_path, trace_records())
+    record = stamped(trace, tmp_path)
+    before = fingerprint(trace)
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    lines[2] = json.dumps({**json.loads(lines[2]), "est_tokens": 1})
+    trace.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _, ledger = export_one(tmp_path, [record])
+    assert [item["code"] for item in ledger] == ["trace-drift"]
+    entry = ledger[0]
+    assert entry["recorded_lines"] == entry["disk_lines"] == before["lines"], "行数一样 —— 只有内容哈希抓得到"
+    assert entry["recorded_sha"] != entry["disk_sha"]
+
+
+def test_an_unstamped_row_still_exports_but_cannot_claim_verification(tmp_path: Path) -> None:
+    """盘上那 12 个历史批次没有指纹。它们该照旧进数据，但不许被读成"校验过"。"""
+    trace = write_trace(tmp_path, trace_records())
+    rows, ledger = export_one(tmp_path, [run_record(trace)])
+    assert ledger == [] and len(rows) == 2
+    identities = [row["provenance"]["trace_identity"] for row in rows]
+    assert {item["status"] for item in identities} == {"unverified"}
+    assert all(item["why"] for item in identities)
+    stats = audit(tmp_path / "rl.jsonl", 2000)
+    assert premise(stats, "盘上那份 trace 现在仍是判据当时看的那份")["ok"] is None, "没量过就该记未量"
+
+
+def test_the_read_back_premise_goes_red_when_the_trace_changes_after_export(tmp_path: Path) -> None:
+    """自证前提不能是摆设：导出之后有人改轨迹，这条必须响。
+
+    这条测试是那条前提的**唯一**外部约束 —— 规则命中自己的导出结果就是循环论证，
+    所以这里刻意在 export 完成后动手改盘上的文件，再重跑一次审计。
+    """
+    trace = write_trace(tmp_path, trace_records())
+    out = tmp_path / "rl.jsonl"
+    export([stamped(trace, tmp_path)], out=out, memory_roots=[tmp_path])
+    stats = audit(out, 2000)
+    item = premise(stats, "盘上那份 trace 现在仍是判据当时看的那份")
+    assert item["ok"] is True, item["detail"]
+    assert stats["rows_verified"] == 2 and stats["rows_unverified"] == 0
+
+    before = trace.read_text(encoding="utf-8")
+    trace.write_text(before.replace('"est_tokens": 901', '"est_tokens": 1'), encoding="utf-8")
+    assert trace.read_text(encoding="utf-8") != before, "夹具没真的改动文件，这条测试就只是在验一个绿"
+    again = audit(out, 2000)
+    red = premise(again, "盘上那份 trace 现在仍是判据当时看的那份")
+    assert red["ok"] is False
+    assert "不符 1" in red["detail"], f"细节要说清是哪份、差在哪，实际：{red['detail']}"
+
+
+def test_a_relocated_batch_is_still_joinable_by_its_relative_path(tmp_path: Path) -> None:
+    """缺口 ②：绝对路径是这台机器的坐标。批次目录拷走之后不该整批 `trace-missing`。"""
+    batch = tmp_path / "batch"
+    trace = write_trace(batch, trace_records())
+    manifest = batch / "manifest.jsonl"
+    raw = stamped(trace, batch).to_dict()
+    raw["trace_path"] = str(tmp_path / "已经不在这里了" / trace.name)
+    manifest.write_text(json.dumps(raw, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    moved = tmp_path / "moved"
+    shutil.copytree(batch / "traces", moved / "traces")
+    (moved / "manifest.jsonl").write_text(manifest.read_text(encoding="utf-8"), encoding="utf-8")
+
+    runs = read_batches([moved])
+    assert runs[0].trace_path == moved / "traces" / "demo.r0.fake.jsonl", "该按批次内的相对路径找回来"
+    out = moved / "rl.jsonl"
+    ledger: list[dict[str, Any]] = []
+    export(runs, out=out, memory_roots=[moved], dropped=ledger)
+    assert ledger == [], f"换了坐标不该变成「数据没了」：{[item['code'] for item in ledger]}"
+    assert {row["provenance"]["trace_identity"]["status"] for row in read_rows(out)} == {"verified"}
+
+
 # --------------------------------------------------------------- 规则标签与人工标注
 
 
@@ -476,7 +590,7 @@ def test_audit_reports_every_premise_green_on_a_clean_export(tmp_path: Path) -> 
     trace = write_trace(tmp_path, trace_records(session=session, turns=3))
     write_snapshot(tmp_path, session, snapshot_messages(turns=3))
     out = tmp_path / "rl.jsonl"
-    export([run_record(trace, turns=3)], out=out, memory_roots=[tmp_path])
+    export([stamped(trace, tmp_path, turns=3)], out=out, memory_roots=[tmp_path])
     stats = audit(out, 2000)
     assert [item["ok"] for item in stats["premises"]] == [True] * len(stats["premises"])
     assert stats["runs_paired"] == 1 and stats["rows"] == 3

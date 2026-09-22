@@ -22,6 +22,13 @@
 压缩阶梯会破产地 A：L1/L2 改写的就是那份 history，快照里的 messages 不再是模型当时看见的。
 所以某轮之后出现过 `context_compact`，那之后的每一行都带 `broken_by_compaction` 的原因串。
 
+在产地之前还有一道**同一性**闸门（SPEC v2 §7.3-7）：manifest 那行判据落盘时给 trace 盖了指纹
+（行数 + 全文件 sha256），join 之前先比对。这一步要挡的是"reward 配错了轨迹"里最难看见的那一种
+—— 同一道题重跑过、或者有人手工改过轨迹，行数甚至轮数都还对，只有内容不是当时那份。三种状态
+分开记：`verified` 进数据、`drift` 整条丢弃并记账、`unverified`（指纹上线之前的历史批次）照旧进
+数据但每一行自述没被校验过。第三种不是折中，是这批数据的既有事实：那些 manifest 里没有可比哈希，
+硬要"看起来都校验过"就得回头伪造指纹。
+
 reward 的算法（§3.9 的原话是"verdict(0/1) 与 steps_to_success 的折扣项"）：
 
     terminal = 1.0 判 pass / 0.0 判 fail；error 与 aborted **不进数据** —— 那是我们自己的
@@ -50,7 +57,7 @@ from typing import Any, Iterable, Sequence
 from miniclaude.backend.sessions import _safe
 from miniclaude.eval.runner import RunRecord
 from miniclaude.infra.failure import VERIFY_TOOLS
-from miniclaude.infra.trace import _SECRET_LIKE, _scrub_value, replay
+from miniclaude.infra.trace import _SECRET_LIKE, _scrub_value, fingerprint, replay
 
 SCHEMA = 1
 DEFAULT_GAMMA = 0.97
@@ -359,6 +366,48 @@ def export(
     return rows
 
 
+def identity_of(run: RunRecord, path: Path) -> dict[str, Any]:
+    """判据那行记下的内容指纹 vs 盘上现在这份。三种状态，没有一种可以混着读：
+
+    * **verified** —— sha 与行数都对得上：这一行的 reward 确实属于手里这份轨迹。
+    * **drift** —— 对不上。要么被手工改过，要么被第二次重跑覆盖了（`append_manifest`
+      只保证同名键一行，不保证文件从没被换过）。这种 run **不进数据**：轮数校验挡得住
+      "少了几轮"，挡不住"同样轮数的另一份轨迹"，而后者配出来的 reward 看起来完全合理。
+    * **unverified** —— manifest 写于 §7.3-7 上线之前，没有可比哈希。照旧导出，但每一行
+      自述这件事，统计里单列一格：盘上那 12 个历史批次因此不可能被误读成校验过的样本。
+    """
+    stamp = run.trace_fp if isinstance(run.trace_fp, dict) else None
+    rel = str((stamp or {}).get("rel") or "")
+    if not stamp or not str(stamp.get("sha") or ""):
+        return {
+            "status": "unverified",
+            "rel": "",
+            "lines": 0,
+            "sha": "",
+            "why": "manifest 这行写于 trace 指纹（SPEC v2 §7.3-7）上线之前，没有可比的内容哈希",
+        }
+    live = fingerprint(path)
+    recorded = str(stamp["sha"])
+    if live["sha"] != recorded or int(live["lines"]) != int(stamp.get("lines") or -1):
+        return {
+            "status": "drift",
+            "rel": rel,
+            "lines": int(live["lines"]),
+            "sha": live["sha"],
+            "recorded_lines": int(stamp.get("lines") or 0),
+            "recorded_sha": recorded,
+            "why": "盘上这份已经不是判据当时看的那份",
+        }
+    return {
+        "status": "verified",
+        "rel": rel or path.name,
+        "lines": int(live["lines"]),
+        "sha": live["sha"],
+        "bytes": int(live["bytes"]),
+        "why": "",
+    }
+
+
 def _write_run(
     run: RunRecord,
     handle: Any,
@@ -392,6 +441,17 @@ def _write_run(
     path = Path(run.trace_path) if run.trace_path else None
     if path is None or not path.is_file():
         return drop("trace-missing", "manifest 里没有 trace 路径，或者那个文件已经不在了")
+    identity = identity_of(run, path)
+    if identity["status"] == "drift":
+        return drop(
+            "trace-drift",
+            f"manifest 记 {identity['recorded_sha']} / {identity['recorded_lines']} 行，"
+            f"盘上这份是 {identity['sha']} / {identity['lines']} 行 —— 判据与轨迹不是同一份，不进数据",
+            recorded_sha=identity["recorded_sha"],
+            disk_sha=identity["sha"],
+            recorded_lines=identity["recorded_lines"],
+            disk_lines=identity["lines"],
+        )
     records = replay(path)
     steps = steps_from(records)
     if not steps:
@@ -464,6 +524,9 @@ def _write_run(
             "provenance": {
                 "trace": str(path) if path else None,
                 "snapshot": str(snapshot_path) if snapshot_path else None,
+                # 判据与轨迹的同一性来源。drift 走不到这里（整行在进数据前就被丢掉），
+                # 所以盘上只会出现 verified / unverified 两种 —— 审计据此回读第三态。
+                "trace_identity": identity,
                 "verdict_source": "eval manifest → RunRecord.verdict",
                 "reward_rule": "terminal * gamma ** steps_to_end（SPEC §3.9）",
                 "taskset_sha": run.taskset_sha,
@@ -509,7 +572,12 @@ def load_labels(path: Path | None) -> dict[str, list[str]]:
 
 
 def read_batches(paths: Sequence[Path]) -> list[RunRecord]:
-    """从若干批次的 `manifest.jsonl` 读回 RunRecord。跑过的那批才导得出来。"""
+    """从若干批次的 `manifest.jsonl` 读回 RunRecord。跑过的那批才导得出来。
+
+    `base=manifest.parent`：绝对路径指空时（批次目录被拷到别的机器、别的 checkout）用指纹里
+    那份相对路径把轨迹找回来。§7.3-7 缺口 ② —— 修之前这些行会整批掉进 `trace-missing`，
+    看起来像"数据没了"，其实只是坐标换了。
+    """
     runs: list[RunRecord] = []
     for item in paths:
         manifest = Path(item)
@@ -525,7 +593,7 @@ def read_batches(paths: Sequence[Path]) -> list[RunRecord]:
             except json.JSONDecodeError:
                 continue
             if isinstance(raw, dict):
-                runs.append(RunRecord.from_dict(raw))
+                runs.append(RunRecord.from_dict(raw, base=manifest.parent))
     return runs
 
 
@@ -608,6 +676,28 @@ def audit(out: Path, block_chars: int) -> dict[str, Any]:
     paired_sessions = len({str(row["session_id"]) for row in paired_rows})
     run_heads = [row for row in parsed if int(row["step"]) == 0]
     trace_dupes = len(run_heads) - len({str(row["provenance"]["trace"]) for row in run_heads})
+    identities = [row["provenance"].get("trace_identity") for row in parsed]
+    verified = [row for row in parsed if (row["provenance"].get("trace_identity") or {}).get("status") == "verified"]
+    unverified = [row for row in parsed if (row["provenance"].get("trace_identity") or {}).get("status") == "unverified"]
+    # 同一性回读：只信盘上现在这份。导出时"对得上"不等于写完就没人动过 —— 这份 JSONL 是
+    # 要给日后的人看的，而轨迹此刻还在原处，所以顺手重算一次哈希是免费的。改过一行就响。
+    # 按**文件**去重再回读：一个 run 有 n 行、每行都重复了同一个指纹，逐行数会把
+    # "一份轨迹被改过"报成 n 份，而细节里那份文件名只会出现一次。
+    stamps: dict[str, dict[str, Any]] = {}
+    for row in verified:
+        trace = str(row["provenance"].get("trace") or "")
+        stamps.setdefault(trace, row["provenance"]["trace_identity"])
+    drift_after: list[str] = []
+    for trace, stamp in stamps.items():
+        try:
+            live = fingerprint(Path(trace))
+        except OSError as exc:
+            drift_after.append(f"{Path(trace).name}：读不到了（{type(exc).__name__}）")
+            continue
+        if live["sha"] != stamp["sha"] or live["lines"] != stamp["lines"]:
+            drift_after.append(
+                f"{Path(trace).name}：导出时 {stamp['sha']}/{stamp['lines']} 行，现在 {live['sha']}/{live['lines']} 行"
+            )
     premises = [
         {
             "claim": "每一行都有 state / action / reward 三格，且 row_id 唯一",
@@ -656,12 +746,33 @@ def audit(out: Path, block_chars: int) -> dict[str, Any]:
             "ok": not over_cap,
             "detail": f"上限 {block_chars} 字符/块 · 超而未标记 {len(over_cap)} 块 · 已标记截断 {sum(1 for row in blocks if row.get('truncated'))} 块",
         },
+        {
+            # 每一行必须说清"判据凭什么是这条轨迹"。第三种状态不该出现在盘上：
+            # drift 在进数据前就整行被丢掉并记账，出现在这里说明有一道判定漏了。
+            "claim": "每一行都自述判据与轨迹的同一性来源，且没有一行带着未校验的指纹冒充已校验",
+            "ok": bool(parsed)
+            and all((item or {}).get("status") in ("verified", "unverified") for item in identities)
+            and all((item or {}).get("sha") for item in identities if (item or {}).get("status") == "verified")
+            and all((item or {}).get("why") for item in identities if (item or {}).get("status") == "unverified"),
+            "detail": f"verified {len(verified)} 行 · unverified {len(unverified)} 行 · 两者之外 {len(parsed) - len(verified) - len(unverified)} 行",
+        },
+        {
+            "claim": "凡 verified 的行，盘上那份 trace 现在仍是判据当时看的那份（导出之后再被改动也响）",
+            "ok": None if not verified else not drift_after,
+            "detail": (
+                f"{len(stamps)} 份轨迹（{len(verified)} 行）逐个回读 sha + 行数 · "
+                f"不符 {len(drift_after)}" + (f"：{drift_after[0]}" if drift_after else "")
+            )
+            + ("" if verified else f" · 本批 {len(unverified)} 行全部写于指纹上线前，没有可回读的对象"),
+        },
     ]
     return {
         "rows": len(parsed),
         "runs_paired": sum(1 for row in parsed if row["state"]["reconstructible"] and int(row["step"]) == 0),
         "runs_fingerprint": sum(1 for row in parsed if not row["state"]["reconstructible"] and int(row["step"]) == 0),
         "truncated_blocks": sum(1 for row in blocks if row.get("truncated")),
+        "rows_verified": len(verified),
+        "rows_unverified": len(unverified),
         "bytes": out.stat().st_size if out.is_file() else 0,
         "premises": premises,
     }
@@ -757,6 +868,8 @@ def run(argv: Sequence[str] | None = None) -> int:
             "每一行都能追到一条 trace 记录 + 一份判据；state 的产地是**可判定**的（有快照、"
             "且逐轮 tool_use id 对得上才给正文，对不上就整份不给）；reward 只有 pass/fail 两种终局；"
             "判据与轨迹轮数不一致、同一份 trace 被重复认领的那些，是在导出前就被丢掉并记账的。"
+            "自 §7.3-7 起还多一件：verified 的行带着 manifest 当时盖的内容指纹，join 之前先比对，"
+            "对不上就是 `trace-drift`、整行不进数据；指纹上线之前的行一律标 unverified，不冒充校验过。"
         ),
         "what_this_does_not_prove": (
             "不证明这批数据够训模型 —— 它首先证明的是**不够**：trace 按设计不含观测正文"
@@ -805,6 +918,15 @@ def run(argv: Sequence[str] | None = None) -> int:
                 "run 整批被 `turn-mismatch` 丢掉）。本条记的是修之前那批数据的既有事实：那次量到 28 个 "
                 "run 进不了导出",
             },
+            {
+                "item": "§7.3-7 的同一性指纹形状",
+                "spec_said": "在 manifest 行里补 trace 的「行数 + 末行哈希」，导出器与 `mcc eval --baseline` 都改成先校验再 join",
+                "as_built": "全文件 sha256 前 16 位 + 行数 + 字节数 + 批次内相对路径；校验只在导出器做",
+                "why": "末行哈希查不出中间行被改过，而缺口 ① 点名的正是「手工改动」；为了数行数本来"
+                "就要读一遍文件，多算一次全文件哈希的边际成本是 0。`--baseline` 那半边没有可校验的对象："
+                "基线文件按 §3.2 的规矩**根本不存 trace 路径**（`regression.baseline_from_report`），它 join 的是"
+                "任务 id → 判据/轮数/token，不读轨迹 —— 给它加一道 trace 校验要先给它一个它刻意没有的依赖",
+            },
         ],
     }
     marks = {True: "x", False: "!", None: "?"}
@@ -818,6 +940,11 @@ def run(argv: Sequence[str] | None = None) -> int:
     print(
         f"成对偏好：同题重跑 {payload['preference_pairs']['same-task-different-run']} 对 · "
         f"SBS 人工标注 {len(labels)} 条"
+    )
+    print(
+        f"同一性：verified {stats['rows_verified']} 行（sha 与 manifest 一致）· "
+        f"unverified {stats['rows_unverified']} 行（写于指纹上线前）· "
+        f"drift {len([item for item in ledger if item['code'] == 'trace-drift'])} 个 run 被挡在数据外"
     )
     print(f"前提：{counts['passed']}/{counts['premises']} 成立（不成立 {counts['failed']} · 未量 {counts['not_measured']}）")
     if args.evidence:

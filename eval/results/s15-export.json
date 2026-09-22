@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-23 01:01:51",
+  "generated_at": "2026-09-23 02:05:42",
   "acceptance": "S15-b（SPEC v2 §3.9）",
   "spec": "§3.9 / D23",
   "question": "盘上真实跑过的轨迹能导成什么形状的 RL 数据，以及**缺**哪一块",
@@ -17,35 +17,38 @@
       "eval/.work/b6-ab/docker",
       "eval/.work/b6-ab/local",
       "eval/.work/fake",
-      "eval/.work/live"
+      "eval/.work/live",
+      "eval/.work/t3-identity"
     ],
-    "runs_in": 158,
+    "runs_in": 206,
     "human_labels": 0
   },
   "out": "eval\\.work\\rl-all.jsonl",
-  "rows": 832,
+  "rows": 1034,
   "dropped_runs": {
     "count": 0,
     "by_reason": {},
     "detail": [],
     "detail_truncated": false
   },
-  "elapsed_seconds": 4.35,
+  "elapsed_seconds": 20.51,
   "gamma": 0.97,
   "block_chars": 2000,
   "include_failed": true,
   "audit": {
-    "rows": 832,
-    "runs_paired": 26,
-    "runs_fingerprint": 132,
-    "truncated_blocks": 8,
-    "bytes": 1698325
+    "rows": 1034,
+    "runs_paired": 62,
+    "runs_fingerprint": 144,
+    "truncated_blocks": 10,
+    "rows_verified": 202,
+    "rows_unverified": 832,
+    "bytes": 2344986
   },
   "premises": [
     {
       "claim": "每一行都有 state / action / reward 三格，且 row_id 唯一",
       "ok": true,
-      "detail": "832 行 · row_id 去重后 832 个"
+      "detail": "1034 行 · row_id 去重后 1034 个"
     },
     {
       "claim": "reward 只有 pass/fail 两种终局（error / aborted 不进数据）",
@@ -55,12 +58,12 @@
     {
       "claim": "凡带正文的行都通过了逐轮 tool_use id 配对",
       "ok": true,
-      "detail": "有正文的行 138 · reconstructible 的行 138"
+      "detail": "有正文的行 314 · reconstructible 的行 314"
     },
     {
       "claim": "只有指纹的行都带着「为什么没有正文」",
       "ok": true,
-      "detail": "指纹行 694 份，全部带 pairing_reasons"
+      "detail": "指纹行 720 份，全部带 pairing_reasons"
     },
     {
       "claim": "导出文件里没有形如密钥的东西（扫的是盘上那份，不是导出时的内存）",
@@ -70,37 +73,47 @@
     {
       "claim": "每个 run 的步数是连续的 0..n-1（没有静默丢轮）",
       "ok": true,
-      "detail": "158 个 run · 前六个 run 的步数 [2, 2, 2, 2, 2, 2]"
+      "detail": "206 个 run · 前六个 run 的步数 [2, 2, 2, 2, 2, 2]"
     },
     {
       "claim": "增量导出不重不漏：delta 条数 == message_count 的增量 − 1（那一条是模型自己的回复）",
       "ok": true,
-      "detail": "26 个产地 A 的 session · 逐行核对 138 行"
+      "detail": "62 个产地 A 的 session · 逐行核对 314 行"
     },
     {
       "claim": "每份 trace 只被一个 run 认领（重跑覆盖同名轨迹的那些没被当成两条样本）",
       "ok": true,
-      "detail": "158 个 run 头 · 同一份 trace 重复认领 0 次"
+      "detail": "206 个 run 头 · 同一份 trace 重复认领 0 次"
     },
     {
       "claim": "超限的块一律留了截断标记",
       "ok": true,
-      "detail": "上限 2000 字符/块 · 超而未标记 0 块 · 已标记截断 8 块"
+      "detail": "上限 2000 字符/块 · 超而未标记 0 块 · 已标记截断 10 块"
+    },
+    {
+      "claim": "每一行都自述判据与轨迹的同一性来源，且没有一行带着未校验的指纹冒充已校验",
+      "ok": true,
+      "detail": "verified 202 行 · unverified 832 行 · 两者之外 0 行"
+    },
+    {
+      "claim": "凡 verified 的行，盘上那份 trace 现在仍是判据当时看的那份（导出之后再被改动也响）",
+      "ok": true,
+      "detail": "48 份轨迹（202 行）逐个回读 sha + 行数 · 不符 0"
     },
     {
       "claim": "账对得上：输入 run 数 == 进导出的 run 数 + 被丢弃的 run 数",
       "ok": true,
-      "detail": "输入 158 = 进数据 158 + 丢弃 0（无）"
+      "detail": "输入 206 = 进数据 206 + 丢弃 0（无）"
     }
   ],
   "counts": {
-    "premises": 10,
-    "passed": 10,
+    "premises": 12,
+    "passed": 12,
     "failed": 0,
     "not_measured": 0
   },
   "preference_pairs": {
-    "same-task-different-run": 43,
+    "same-task-different-run": 54,
     "sbs-human": 0,
     "pairs": [
       {
@@ -238,7 +251,7 @@
     ],
     "note": "第一格配的是「换配置/换种子重跑」，不是「同一上下文里两个动作哪个好」。后者要 §3.2 的人工标注。"
   },
-  "what_this_proves": "每一行都能追到一条 trace 记录 + 一份判据；state 的产地是**可判定**的（有快照、且逐轮 tool_use id 对得上才给正文，对不上就整份不给）；reward 只有 pass/fail 两种终局；判据与轨迹轮数不一致、同一份 trace 被重复认领的那些，是在导出前就被丢掉并记账的。",
+  "what_this_proves": "每一行都能追到一条 trace 记录 + 一份判据；state 的产地是**可判定**的（有快照、且逐轮 tool_use id 对得上才给正文，对不上就整份不给）；reward 只有 pass/fail 两种终局；判据与轨迹轮数不一致、同一份 trace 被重复认领的那些，是在导出前就被丢掉并记账的。自 §7.3-7 起还多一件：verified 的行带着 manifest 当时盖的内容指纹，join 之前先比对，对不上就是 `trace-drift`、整行不进数据；指纹上线之前的行一律标 unverified，不冒充校验过。",
   "what_this_does_not_prove": "不证明这批数据够训模型 —— 它首先证明的是**不够**：trace 按设计不含观测正文（§3.1 为了日志体积、也为了不把仓库内容抄进日志），所以 state 的正文只能来自 §3.6 的会话快照，而快照是 S13 才上线的 —— 那之前的批次结构性地只有指纹。要拿这个 agent 做真·后训练，第一步不是训，是让 trace 把 observation 落盘：那是 §3.1 没覆盖的改动，代价与隐私边界都得重开一次评估。第二件事不在**这批**数据里，但它是上一批的真实经历：manifest 与 trace 曾不是一一对应（见 amendments 第 4 条），重跑过的批次里早先那几行指向的是别人的轨迹，那部分**同一道题的重跑数据已经不可复原** —— 现在盘上这 12 个批次量到的是0 个 run 进不了导出，因为两处源头都修了；修不了的是历史。",
   "amendments": [
     {
@@ -256,7 +269,7 @@
     {
       "item": "§3.9 的 labels.jsonl",
       "spec_said": "SBS 人工标注提供成对偏好信号",
-      "as_built": "接口实现（--labels）。盘上人工标注 0 条；合成对 43 对，其判据来自 manifest 而非人工",
+      "as_built": "接口实现（--labels）。盘上人工标注 0 条；合成对 54 对，其判据来自 manifest 而非人工",
       "why": "手写剧本的 16 条核对表核对的是分类器、不是两个动作谁更好；拿它当 SBS 是在把「我审过代码」写成「人标过偏好」"
     },
     {
@@ -264,6 +277,12 @@
       "spec_said": "trace + 判据 → 每行一条 (state, action, reward)（默认两者一一可 join）",
       "as_built": "join 前先按 trace 路径去重、再按轮数校验，不通过的整条不进数据并记账（这次丢了 0 个 run：无）",
       "why": "trace 文件名按 (task, repeat, engine) 定，重跑是**覆盖**上一份，而当时的 manifest 是纯 append 写出来的。所以重跑过的批次里，早先那些行指向的已经是别人的轨迹 —— 直接 join 会把一份轨迹当成两条带不同 reward 的样本。两个源头都修了：runner 的 append_manifest 改成按 (task, repeat) 取代旧行；`steps_from` 不再把「只有拒载记录的那一轮」 算成决策步（循环先 `turn += 1` 再算预算，那一格的号比 manifest 大 1，于是死在 L3 线上的 run 整批被 `turn-mismatch` 丢掉）。本条记的是修之前那批数据的既有事实：那次量到 28 个 run 进不了导出"
+    },
+    {
+      "item": "§7.3-7 的同一性指纹形状",
+      "spec_said": "在 manifest 行里补 trace 的「行数 + 末行哈希」，导出器与 `mcc eval --baseline` 都改成先校验再 join",
+      "as_built": "全文件 sha256 前 16 位 + 行数 + 字节数 + 批次内相对路径；校验只在导出器做",
+      "why": "末行哈希查不出中间行被改过，而缺口 ① 点名的正是「手工改动」；为了数行数本来就要读一遍文件，多算一次全文件哈希的边际成本是 0。`--baseline` 那半边没有可校验的对象：基线文件按 §3.2 的规矩**根本不存 trace 路径**（`regression.baseline_from_report`），它 join 的是任务 id → 判据/轮数/token，不读轨迹 —— 给它加一道 trace 校验要先给它一个它刻意没有的依赖"
     }
   ]
 }

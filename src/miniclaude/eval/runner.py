@@ -7,6 +7,9 @@
   不是靠跑完再写。72 次 live 跑到第 50 次崩了要能接着跑，这是 B1 的字面要求。
   取代而非叠加，是因为 trace 文件名按 `(task, repeat, engine)` 定、重跑会覆盖上一份轨迹；
   纯 append 就是让一行判据指向一条已经不存在的轨迹。
+* **取代只保证"指向哪一份"，指纹才保证"就是那一份"**：每一行落盘前给 trace 按内容盖一个
+  戳（行数 + 字节数 + sha256 前 16 位 + 批次内相对路径）。没有它，一行判据在手工改过的、或者被
+  第三次覆盖过的轨迹上照样看起来完好 —— §7.3-7 的缺口 ①，导出器只能靠"轮数对不对"间接撞见。
 * **批次预算** `budget_tokens` 是整批硬上限，与单任务的 `token_ceiling` 不是一回事。
   没有它，一次失手的 live 批次能在一夜之间把预算花掉两倍。
 * **失败关闭**：批跑没有人类确认者，`confirmer` 恒返回"拒绝"，权限模式取
@@ -32,10 +35,33 @@ from miniclaude.eval import drivers, judge as judge_mod, regression
 from miniclaude.eval.contract import Context, isolate
 from miniclaude.eval.metrics import per_tag, summarize_batch
 from miniclaude.eval.taskset import TaskInstance, TaskSet
-from miniclaude.infra.trace import summarize
+from miniclaude.infra.trace import fingerprint, summarize
 from miniclaude.llm.openai_compat import OpenAICompatClient
 
 VERDICTS = ("pass", "fail", "error", "aborted")
+
+
+def trace_stamp(path: Path | None, root: Path) -> dict[str, Any] | None:
+    """给一条 run 的轨迹按内容留证，并附一份**相对于批次目录**的路径。
+
+    绝对路径是这台机器的坐标：`eval/.work/` 被 .gitignore 扫掉，批次目录拷到别的机器、
+    别的 checkout、甚至只是换个盘符，那一行就指空了（§7.3-7 缺口 ②）。相对路径 +
+    内容指纹一起写，下游才既找得到文件、又验得出"这就是判据当时看的那份"（缺口 ①）。
+
+    文件不在（装配失败、或 trace 被禁用）就不留证：**没有指纹**和**指纹不符**是两件事，
+    前者只能标记成"这一行未经校验"，后者才该把整行挡在数据外面。
+    """
+    if path is None:
+        return None
+    resolved = Path(path)
+    if not resolved.is_file():
+        return None
+    stamp = fingerprint(resolved)
+    try:
+        stamp["rel"] = Path(os.path.relpath(resolved, root)).as_posix()
+    except ValueError:  # 跨盘符（Windows）没有相对路径可言
+        stamp["rel"] = resolved.name
+    return stamp
 
 
 @dataclass
@@ -57,6 +83,10 @@ class RunRecord:
     broken: list[str] = field(default_factory=list)
     error: str = ""
     over_token_ceiling: bool = False
+    # 判据落盘那一刻 trace 的内容指纹（行数/字节/sha256 前 16 位 + 批次内相对路径）。
+    # `None` = 这行写于 §7.3-7 上线之前，或当时没有 trace 文件 —— 它与"指纹不符"不同，
+    # 只能被标成未经校验，不能拿来做同一性判定。
+    trace_fp: dict[str, Any] | None = None
 
     @property
     def tokens(self) -> int:
@@ -86,17 +116,29 @@ class RunRecord:
             "broken": self.broken,
             "error": self.error,
             "over_token_ceiling": self.over_token_ceiling,
+            "trace_fp": self.trace_fp,
         }
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "RunRecord":
+    def from_dict(cls, raw: dict[str, Any], *, base: Path | None = None) -> "RunRecord":
         path = raw.get("trace_path")
+        trace_path = Path(path) if path else None
+        stamp = raw.get("trace_fp")
+        if base is not None and trace_path is not None and not trace_path.is_file():
+            # 绝对路径找不到 ≠ 这份轨迹没了。批次目录被拷走时它还在，只是换了坐标 ——
+            # 指纹里那份相对路径就是为这一刻留的。换了坐标也不会认错文件：同一性是
+            # sha 判的，路径只负责把文件找到（`export_rl.identity_of`）。
+            rel = str((stamp or {}).get("rel") or "") if isinstance(stamp, dict) else ""
+            if rel:
+                candidate = Path(base) / rel
+                if candidate.is_file():
+                    trace_path = candidate
         return cls(
             task_id=str(raw["task_id"]),
             repeat=int(raw.get("repeat", 0)),
             engine=str(raw.get("engine", "unknown")),
             verdict=str(raw.get("verdict", "error")),
-            trace_path=Path(path) if path else None,
+            trace_path=trace_path,
             metrics=dict(raw.get("metrics") or {}),
             failure_modes=list(raw.get("failure_modes") or []),
             wall_ms=int(raw.get("wall_ms") or 0),
@@ -107,6 +149,7 @@ class RunRecord:
             broken=list(raw.get("broken") or []),
             error=str(raw.get("error") or ""),
             over_token_ceiling=bool(raw.get("over_token_ceiling")),
+            trace_fp=dict(stamp) if isinstance(stamp, dict) else None,
         )
 
 
@@ -342,7 +385,7 @@ class EvalRunner:
             if not line.strip():
                 continue
             try:
-                record = RunRecord.from_dict(json.loads(line))
+                record = RunRecord.from_dict(json.loads(line), base=self.out)
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 stale += 1
                 continue
@@ -362,7 +405,13 @@ class EvalRunner:
         配上别人的 reward —— 已经在这批数据上抓到 26 例。整份原子重写（tmp + `os.replace`）：
         写坏了最多是退回上一版，不会留下一半的一份。读不懂的行原样留着 —— 那是证据，
         哪怕它已经不是一条可用的记录。
+
+        取代只解决"指向哪一份"，解决不了"这份就是判据看的那份"：手工改过、或者被第三次
+        覆盖，行看起来仍然完好。所以落盘前按内容盖一个指纹（`trace_stamp`）。这是**唯一的**
+        盖指纹的地方 —— 判据从这里出去，指纹就必须从这里出去，两条路各自算就会漂。
         """
+        if record.trace_fp is None:
+            record.trace_fp = trace_stamp(record.trace_path, self.out)
         lines: list[str] = []
         if self.manifest.is_file():
             for line in self.manifest.read_text(encoding="utf-8").splitlines():
