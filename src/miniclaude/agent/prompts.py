@@ -97,6 +97,8 @@ def build_system_prompt(
     workspace: Workspace | None = None,
     map_provider: Callable[[], str] | None = None,
     max_map_lines: int = 30,
+    skills_catalog: str = "",
+    external_note: str = "",
 ) -> str:
     """把运行期事实注入模板：工作目录、操作系统、Python、工具清单、仓库形状。
 
@@ -106,6 +108,11 @@ def build_system_prompt(
     `map_provider` 是 SPEC v2 §3.4 的注入点：给定它就用它（符号地图，自己按仓库
     指纹缓存），没给就退回那张 30 行的广度优先目录树。两条臂同时存在是 B3 的 A/B
     要求的 —— "地图关"必须是一个真能跑的配置，不是把段落删掉。
+
+    `skills_catalog` / `external_note` 排在**最末尾**，这是位置上的一个刻意决定：
+    技能目录是会话中途也可能变的东西（用户装了个新技能），把它放在前面会把后面
+    整段提示词的公共前缀打掉。§3.7 的"延迟加载"到这里才真正落到 token 上 ——
+    常驻的只有目录，正文靠 `load_skill` 取。
     """
     ws = workspace or Workspace(project_root)
     sections: list[str] = [SYSTEM_PROMPT.strip(), _environment(ws, platform, model, python_executable)]
@@ -117,6 +124,10 @@ def build_system_prompt(
     sections.append(_tools_section(tool_names))
     sections.append(PLANNING_PROMPT.strip())
     sections.append(SELF_DEBUG_PROMPT.strip())
+    if external_note:
+        sections.append(external_note)
+    if skills_catalog:
+        sections.append(skills_catalog)
     return "\n\n".join(sections)
 
 

@@ -126,6 +126,21 @@
     "turn",
     "usage"
   ],
+  "mcp": [
+    "configured",
+    "kind",
+    "running",
+    "schema_version",
+    "seq",
+    "servers",
+    "session",
+    "skip_reason",
+    "skipped",
+    "tools",
+    "trace_id",
+    "ts",
+    "turn"
+  ],
   "permission": [
     "decision",
     "kind",
@@ -244,6 +259,23 @@
     "tools",
     "trace_id",
     "ts"
+  ],
+  "skills": [
+    "body_chars_total",
+    "cap_lines",
+    "catalog_chars",
+    "catalog_lines",
+    "kind",
+    "names",
+    "rejected",
+    "root",
+    "schema_version",
+    "seq",
+    "session",
+    "skills",
+    "trace_id",
+    "ts",
+    "turn"
   ],
   "todo_update": [
     "items",

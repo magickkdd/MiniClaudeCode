@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -29,6 +30,12 @@ DEFAULTS: dict[str, Any] = {
     "DOCKER_NETWORK": "none",        # 空串 = 不传 --network（宿主网络），仅本地排障用
     "CHECKPOINTS": 1,                # 0 = 不建影子 git（A3 只读演练与容器内跑批用）
     "MEMORY_DIR": ".mcc",            # 记忆 / 快照 / 会话快照的唯一落盘目录名
+    # §3.7：这里只做两件事 —— JSON 能不能解析、transport 在不在 advertised 名单里
+    # （后者和 BACKEND_NAMES 是同一条路：契约住配置层，实现住 ext/mcp.py）。
+    # 名字与 endpoint 的语义校验只有一个产地：`MCPServerSpec.from_mapping`；在这里
+    # 再抄一遍正则，就是 §3.4.1-5 拒绝过的双旋钮。
+    "MCP_SERVERS": "",               # 空 = 一个外部工具都不接
+    "SKILLS_DIR": "skills",          # 技能根目录；不存在就等于没有技能
 }
 
 # 字符串型旋钮的缺省值与整数型共用 DEFAULTS 这一张表，由 `_str()` 读取。
@@ -38,6 +45,10 @@ DEFAULTS: dict[str, Any] = {
 # 拒绝打错的名字，而不该为此 import 执行层。两边一致由
 # `tests/test_backend_factory.py::test_every_advertised_name_has_an_implementation` 钉住。
 BACKEND_NAMES: tuple[str, ...] = ("local", "docker")
+
+# MCP 的传输方式，同样是"契约住这里、实现住 ext/mcp.py"。两边一致由
+# `tests/test_mcp_bridge.py::test_advertised_transports_match_the_bridge` 钉住。
+MCP_TRANSPORTS: tuple[str, ...] = ("stdio",)
 
 
 class ConfigError(RuntimeError):
@@ -77,6 +88,9 @@ class Config:
     docker_network: str = str(DEFAULTS["DOCKER_NETWORK"])
     checkpoints: bool = bool(DEFAULTS["CHECKPOINTS"])
     memory_dir: str = str(DEFAULTS["MEMORY_DIR"])
+    # 已经过形状校验的 server 描述（字典原样交下去，语义校验在 MCPServerSpec.from_mapping）
+    mcp_servers: tuple[dict[str, Any], ...] = ()
+    skills_dir: str = str(DEFAULTS["SKILLS_DIR"])
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None) -> "Config":
@@ -118,6 +132,10 @@ class Config:
         memory_dir = _str("MEMORY_DIR")
         if not memory_dir or ".." in Path(memory_dir).parts:
             raise ConfigError(f"MEMORY_DIR 不能为空或包含 ..，当前值：{memory_dir!r}")
+        skills_dir = _str("SKILLS_DIR")
+        if not skills_dir or ".." in Path(skills_dir).parts:
+            raise ConfigError(f"SKILLS_DIR 不能为空或包含 ..，当前值：{skills_dir!r}")
+        servers = _mcp_servers()
 
         return cls(
             base_url=base_url,
@@ -142,6 +160,8 @@ class Config:
             docker_network=_str("DOCKER_NETWORK"),
             checkpoints=bool(_int("CHECKPOINTS")),
             memory_dir=memory_dir,
+            mcp_servers=servers,
+            skills_dir=skills_dir,
         )
 
     @property
@@ -149,6 +169,12 @@ class Config:
         """记忆 / 快照 / 会话快照的唯一落盘位置。§3.4、§3.6 的所有路径都从这里派生。"""
         mem = Path(self.memory_dir).expanduser()
         return mem if mem.is_absolute() else self.project_root / mem
+
+    @property
+    def skills_root(self) -> Path:
+        """§3.7 技能根目录。与 `memory_root` 同一套相对/绝对规则，不在两处各写一遍。"""
+        skills = Path(self.skills_dir).expanduser()
+        return skills if skills.is_absolute() else self.project_root / skills
 
     def redacted(self) -> dict[str, Any]:
         """可安全打印 / 写进 trace 的配置视图 —— 密钥永不进日志。"""
@@ -172,6 +198,10 @@ class Config:
             "docker_network": self.docker_network,
             "checkpoints": self.checkpoints,
             "memory_root": str(self.memory_root),
+            # 只报名字与计数：endpoint 与 args 里可能带着凭据，那两个字段是
+            # `MCPServerSpec.as_trace()` 自己负责脱敏之后才进 trace 的，配置视图里不重复暴露。
+            "mcp_servers": [str(item.get("name", "")) for item in self.mcp_servers],
+            "skills_root": str(self.skills_root),
         }
 
     def with_root(self, project_root: Path) -> "Config":
@@ -234,6 +264,38 @@ def _float(name: str) -> float:
 def _resolve(raw: str, base: Path) -> Path:
     path = Path(raw).expanduser()
     return path.resolve() if path.is_absolute() else (base / path).resolve()
+
+
+def _mcp_servers() -> tuple[dict[str, Any], ...]:
+    """`MCP_SERVERS` 的**形状**校验：能不能解析、是不是对象数组、名字齐不齐。
+
+    语义校验（transport 支持不支持、endpoint 长什么样）只有一个产地：
+    `ext/mcp.py::MCPServerSpec.from_mapping`。在那里写第二遍名字正则，就是
+    §3.4.1-5 拒绝过的双旋钮。
+    """
+    raw = _str("MCP_SERVERS")
+    if not raw:
+        return ()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"MCP_SERVERS 必须是 JSON 数组，当前值解析失败：{exc}") from exc
+    if isinstance(parsed, dict):
+        parsed = [parsed]  # 只配一个服务时写成单个对象是最自然的猜测，替用户纠正它
+    if not isinstance(parsed, list):
+        raise ConfigError(f"MCP_SERVERS 必须是 JSON 数组，当前是 {type(parsed).__name__}")
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            raise ConfigError(f"MCP_SERVERS 第 {index + 1} 项必须是对象，当前是 {type(item).__name__}")
+        name = str(item.get("name", "")).strip()
+        if not name:
+            raise ConfigError(f"MCP_SERVERS 第 {index + 1} 项缺 name（工具名前缀要用它）")
+        if name in {str(existing.get("name")) for existing in out}:
+            # 同名两个服务会把工具注册撞成 DuplicateToolError，而那条报错说不出"是哪两项"。
+            raise ConfigError(f"MCP_SERVERS 里有两项都叫 {name!r}：命名空间会互相覆盖")
+        out.append(item)
+    return tuple(out)
 
 
 _CACHE: Config | None = None

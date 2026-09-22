@@ -1,0 +1,848 @@
+{
+  "generated_at": "2026-09-22 22:43:10",
+  "acceptance": "S14 / §7.1 行 14",
+  "spec": "§3.7 MCP bridge 与 Skills",
+  "engine": "fake",
+  "verdict": "pass",
+  "wall_seconds": 6.4,
+  "peers": {
+    "自写的敌意服务": "tests\\fixtures\\mcp_fixture_server.py",
+    "官方 SDK 服务": "tests\\fixtures\\mcp_sdk_server.py"
+  },
+  "premises": [
+    {
+      "claim": "接一个真实 MCP server 跑通（官方 SDK 写的那个：握手 + tools/list + tools/call）",
+      "ok": true,
+      "detail": "sdk-fx @ 2024-11-05 → ['mcp__sdk__sdk_boom', 'mcp__sdk__sdk_echo', 'mcp__sdk__sdk_env']"
+    },
+    {
+      "claim": "inputSchema 由第三方实现产生，参数名照原样进到我们这套校验里",
+      "ok": true,
+      "detail": "sdk_echo 的 properties = ['text', 'times']"
+    },
+    {
+      "claim": "中文在 stdio 上来回无损（Windows 默认 cp936 那一刀已经在两端挡掉）",
+      "ok": true,
+      "detail": "回话 = '你好 MCP 你好 MCP'"
+    },
+    {
+      "claim": "远端自报的风险一律不采信：读得到、只展示、采信值恒为 execute",
+      "ok": true,
+      "detail": "自报 ['destructive', 'read'] → 采信 ['execute']；SDK 那臂 ['', 'read']"
+    },
+    {
+      "claim": "命名空间前缀挡得住顶名：远端逐字报 read_file / write_file 也抢不走本地那一格",
+      "ok": true,
+      "detail": "注册名 ['mcp__fx__read_file', 'mcp__fx__write_file'] · 本地 read_file 仍读到盘上内容 = True · 冒名者拿不到本地内容 = True（registry 共 9 格）"
+    },
+    {
+      "claim": "AUTO 模式下外部工具仍然要问，而本地写照样放行（§6.3-1）",
+      "ok": true,
+      "detail": "auto：外部 ask / 本地写 allow · 理由「外部工具（MCP）在工作区之外执行，不在自动放行的语义范围内，需要单独确认。」"
+    },
+    {
+      "claim": "没有确认渠道时保守拒绝，绝不擅自执行",
+      "ok": true,
+      "detail": "confirmer=None 的 AUTO 门：authorize = False，理由「需要用户确认，但当前没有可用的确认渠道。」"
+    },
+    {
+      "claim": "ask 问、readonly 拒，而 load_skill 是只读级（无人值守跑批不会卡在它上面）",
+      "ok": true,
+      "detail": "ask=ask · readonly=deny · load_skill(auto)=allow"
+    },
+    {
+      "claim": "被拒的外部调用在工作区之外没留下任何文件（判盘，不判日志）",
+      "ok": true,
+      "detail": "确认弹窗 ['mcp__fx__write_note'] → 落盘 = False · tool_call 记录 []（拒绝不进执行分支，账上只有 permission 那条 deny）"
+    },
+    {
+      "claim": "同一支工具点了同意就真的执行 —— 排除「这条路本来就通不了」那种假安全",
+      "ok": true,
+      "detail": "调用记录 [{'name': 'mcp__fx__write_note', 'ok': True}] · 盘上内容 ['这一行应当出现']"
+    },
+    {
+      "claim": "只读模式连远端进程都不起：没有副作用是结构性的，不是判出来的",
+      "ok": true,
+      "detail": "registry 里的 mcp__ 工具 = [] · 起了的进程 = [] · skip_reason「只读模式：没有启动任何 MCP 服务，外部工具未装配」"
+    },
+    {
+      "claim": "BaseTool.invoke() 的校验链路在上管道之前：坏参数不落盘、也不弄坏连接",
+      "ok": true,
+      "detail": "text=12 → 「参数校验失败：'text' 应为 string，实际是 int 工具 mcp__fx__write_note 的 schema 是 {\"mcp__fx__write_note\": \"text:string\"}（* 为必填）」 · 落盘 = False · 之后 echo 仍通 = True"
+    },
+    {
+      "claim": "宿主 env 不外泄：密钥即使被点名也不透传，且剔除留痕；白名单外的名字不假装给了",
+      "ok": true,
+      "detail": "点名 ['LLM_API_KEY', 'MCP_FIXTURE_NAMED', 'MCP_DEFINITELY_NOT_SET_ANYWHERE'] → 子进程可见 {'marker': '', 'has_api_key': False, 'has_base_url': False, 'has_path': True, 'has_pythonpath': False, 'named': '点名了才给'} · dropped_env ['LLM_API_KEY', 'MCP_DEFINITELY_NOT_SET_ANYWHERE']"
+    },
+    {
+      "claim": "配置 args 里的密钥既不进 trace 也不进 redacted()，但服务名照留",
+      "ok": true,
+      "detail": "trace 里含明文 = False · 含「已脱敏」 = True · redacted 只留名字 ['fx']"
+    },
+    {
+      "claim": "坏远端带不走会话：起不来的报错、不答的超时、stdout 上的噪声，进程都收干净",
+      "ok": true,
+      "detail": "exit → 「MCP server fx 关掉了输出（进程退出码 None）：fixture: 我不干」 · silent → 「MCP server fx 回答超时（3s）」 · garbage → 4 个工具照样列出 · close 之后无残留进程"
+    },
+    {
+      "claim": "坏工具条目逐条给理由并跳过，不是把整批带走，也不是洗个名字留下",
+      "ok": true,
+      "detail": "收 ['mcp__fx__boom', 'mcp__fx__echo', 'mcp__fx__probe', 'mcp__fx__write_note'] · 跳 4 条：[\"远端工具名不合法：'bad name'\", '没有 inputSchema，参数没法校验', 'inputSchema 没有 properties，参数会被静默丢弃', '同名工具已经注册（远端报了两个同名的）']"
+    },
+    {
+      "claim": "技能目录的常驻成本与正文长度解耦（延迟加载那笔账）",
+      "ok": true,
+      "detail": "正文 5200 字符 → 目录 99 字符（3 行）；再加一个技能只多 19 字符；常驻/展开 = 0.019"
+    },
+    {
+      "claim": "随仓库发布的 skills/ 打得进 system，且正文不跟着进",
+      "ok": true,
+      "detail": "2 个技能 ['add-eval-task', 'trace-triage'] · 目录 4 行 / 240 字符 · 正文合计 2130 字符 {'add-eval-task': 1190, 'trace-triage': 940}"
+    },
+    {
+      "claim": "装配路径只有一条：src 里 ToolRegistry.default(...) 的调用点只有一个，外部工具走 extra_tools",
+      "ok": true,
+      "detail": "调用点 ['src/miniclaude/cli/main.py:181']；另有 2 处只是文档字符串提到 · 那一臂注册了 4 个 mcp__ 工具"
+    },
+    {
+      "claim": "外部能力与技能各留一条装配期 trace 事件，事后查得到「这一轮问没问过人」",
+      "ok": true,
+      "detail": "mcp = {'skip_reason': '', 'configured': ['fx'], 'running': ['fx'], 'tools': 4, 'skipped': 4} · skills = {'root': 'D:\\\\Embodied Agent\\\\Agent-JD\\\\mini-claude-code\\\\eval\\\\.work\\\\s14-ext\\\\granted\\\\skills', 'skills': 1, 'names': ['demo-skill'], 'catalog_lines': 3, 'catalog_chars': 90, 'body_chars_total': 11, 'rejected': 0, 'cap_lines': 30}"
+    }
+  ],
+  "counts": {
+    "premises": 20,
+    "passed": 20,
+    "failed": 0,
+    "not_measured": 0
+  },
+  "measurements": {
+    "discovery": {
+      "good": {
+        "mode": "good",
+        "tools": [
+          "mcp__fx__boom",
+          "mcp__fx__echo",
+          "mcp__fx__probe",
+          "mcp__fx__write_note"
+        ],
+        "adopted": {
+          "mcp__fx__echo": {
+            "risk": "execute",
+            "declared": "read",
+            "external": true
+          },
+          "mcp__fx__probe": {
+            "risk": "execute",
+            "declared": "",
+            "external": true
+          },
+          "mcp__fx__boom": {
+            "risk": "execute",
+            "declared": "destructive",
+            "external": true
+          },
+          "mcp__fx__write_note": {
+            "risk": "execute",
+            "declared": "destructive",
+            "external": true
+          }
+        },
+        "ok": true,
+        "error": "",
+        "server_info": {
+          "protocolVersion": "2024-11-05",
+          "name": "fixture-mcp",
+          "title": "测试用的假 MCP 服务"
+        },
+        "skipped": [
+          "远端工具名不合法：'bad name'",
+          "没有 inputSchema，参数没法校验",
+          "inputSchema 没有 properties，参数会被静默丢弃",
+          "同名工具已经注册（远端报了两个同名的）"
+        ],
+        "children_after_close": 0
+      },
+      "shadow": {
+        "mode": "shadow",
+        "tools": [
+          "mcp__fx__read_file",
+          "mcp__fx__write_file"
+        ],
+        "adopted": {
+          "mcp__fx__read_file": {
+            "risk": "execute",
+            "declared": "read",
+            "external": true
+          },
+          "mcp__fx__write_file": {
+            "risk": "execute",
+            "declared": "destructive",
+            "external": true
+          }
+        },
+        "ok": true,
+        "error": "",
+        "server_info": {
+          "protocolVersion": "2024-11-05",
+          "name": "fixture-mcp",
+          "title": "测试用的假 MCP 服务"
+        },
+        "skipped": [],
+        "children_after_close": 0
+      },
+      "dead": {
+        "mode": "exit",
+        "tools": [],
+        "adopted": {},
+        "ok": false,
+        "error": "MCP server fx 关掉了输出（进程退出码 None）：fixture: 我不干",
+        "server_info": {},
+        "skipped": [],
+        "children_after_close": 0
+      },
+      "silent": {
+        "mode": "silent",
+        "tools": [],
+        "adopted": {},
+        "ok": false,
+        "error": "MCP server fx 回答超时（3s）",
+        "server_info": {},
+        "skipped": [],
+        "children_after_close": 0
+      },
+      "garbage": {
+        "mode": "garbage",
+        "tools": [
+          "mcp__fx__boom",
+          "mcp__fx__echo",
+          "mcp__fx__probe",
+          "mcp__fx__write_note"
+        ],
+        "adopted": {
+          "mcp__fx__echo": {
+            "risk": "execute",
+            "declared": "read",
+            "external": true
+          },
+          "mcp__fx__probe": {
+            "risk": "execute",
+            "declared": "",
+            "external": true
+          },
+          "mcp__fx__boom": {
+            "risk": "execute",
+            "declared": "destructive",
+            "external": true
+          },
+          "mcp__fx__write_note": {
+            "risk": "execute",
+            "declared": "destructive",
+            "external": true
+          }
+        },
+        "ok": true,
+        "error": "",
+        "server_info": {
+          "protocolVersion": "2024-11-05",
+          "name": "fixture-mcp",
+          "title": "测试用的假 MCP 服务"
+        },
+        "skipped": [
+          "远端工具名不合法：'bad name'",
+          "没有 inputSchema，参数没法校验",
+          "inputSchema 没有 properties，参数会被静默丢弃",
+          "同名工具已经注册（远端报了两个同名的）"
+        ],
+        "children_after_close": 0
+      },
+      "sdk": {
+        "ok": true,
+        "error": "",
+        "server_info": {
+          "protocolVersion": "2024-11-05",
+          "name": "sdk-fx",
+          "title": null
+        },
+        "tools": [
+          "mcp__sdk__sdk_boom",
+          "mcp__sdk__sdk_echo",
+          "mcp__sdk__sdk_env"
+        ],
+        "adopted": {
+          "mcp__sdk__sdk_echo": {
+            "risk": "execute",
+            "declared": "read",
+            "external": true
+          },
+          "mcp__sdk__sdk_env": {
+            "risk": "execute",
+            "declared": "read",
+            "external": true
+          },
+          "mcp__sdk__sdk_boom": {
+            "risk": "execute",
+            "declared": "",
+            "external": true
+          }
+        },
+        "schema_from_sdk": [
+          "text",
+          "times"
+        ],
+        "unicode_round_trip": "你好 MCP 你好 MCP",
+        "remote_failure_is_error": true,
+        "children_after_close": 0
+      }
+    },
+    "env_boundary": {
+      "asked_for": [
+        "LLM_API_KEY",
+        "MCP_FIXTURE_NAMED",
+        "MCP_DEFINITELY_NOT_SET_ANYWHERE"
+      ],
+      "child_sees": {
+        "marker": "",
+        "has_api_key": false,
+        "has_base_url": false,
+        "has_path": true,
+        "has_pythonpath": false,
+        "named": "点名了才给"
+      },
+      "dropped_env": [
+        "LLM_API_KEY",
+        "MCP_DEFINITELY_NOT_SET_ANYWHERE"
+      ],
+      "named_env_delivered": true
+    },
+    "shadow": {
+      "advertised_by_remote": [
+        "read_file",
+        "write_file"
+      ],
+      "registered_as": [
+        "mcp__fx__read_file",
+        "mcp__fx__write_file"
+      ],
+      "local_still_reads_disk": true,
+      "impostor_says_it_is_remote": true,
+      "impostor_cannot_see_disk": true,
+      "local_external": false,
+      "local_risk": "read",
+      "remote_risk": "execute",
+      "registry_size": 9
+    },
+    "gate": {
+      "ask": {
+        "external_decision": "ask",
+        "external_reason": "execute 级操作，需要用户确认",
+        "authorize_after_refusal": false,
+        "authorize_reason": "用户拒绝了这次操作。",
+        "confirmer_called_with": [
+          "mcp__fx__echo"
+        ],
+        "local_write": "ask",
+        "load_skill": "allow"
+      },
+      "auto": {
+        "external_decision": "ask",
+        "external_reason": "外部工具（MCP）在工作区之外执行，不在自动放行的语义范围内，需要单独确认。",
+        "authorize_after_refusal": false,
+        "authorize_reason": "用户拒绝了这次操作。",
+        "confirmer_called_with": [
+          "mcp__fx__echo"
+        ],
+        "local_write": "allow",
+        "load_skill": "allow"
+      },
+      "readonly": {
+        "external_decision": "deny",
+        "external_reason": "当前是只读模式，execute 级操作被禁用。",
+        "authorize_after_refusal": false,
+        "authorize_reason": "当前是只读模式，execute 级操作被禁用。",
+        "confirmer_called_with": [],
+        "local_write": "deny",
+        "load_skill": "allow"
+      },
+      "adopted_risks": [
+        "execute"
+      ],
+      "declared_risks": [
+        "destructive",
+        "read"
+      ],
+      "no_confirmer": {
+        "authorized": false,
+        "reason": "需要用户确认，但当前没有可用的确认渠道。"
+      }
+    },
+    "loop": {
+      "refused": {
+        "mode": "auto",
+        "confirmer_called_with": [
+          "mcp__fx__write_note"
+        ],
+        "note_written": false,
+        "note_lines": [],
+        "permission_decisions": [
+          {
+            "tool": "mcp__fx__write_note",
+            "decision": "deny"
+          }
+        ],
+        "tool_calls": [],
+        "trace_kinds": [
+          "backend",
+          "checkpoint",
+          "llm_request",
+          "llm_response",
+          "mcp",
+          "permission",
+          "repo_map",
+          "run_end",
+          "run_start",
+          "session_snapshot",
+          "session_start",
+          "skills",
+          "turn_start"
+        ],
+        "mcp_event": {
+          "seq": 4,
+          "ts": 1790088189.774,
+          "session": "c055be956ee0",
+          "kind": "mcp",
+          "trace_id": "ac063cce8b5243498744d61cc914134e",
+          "schema_version": "2.0",
+          "turn": 0,
+          "skip_reason": "",
+          "configured": [
+            "fx"
+          ],
+          "running": [
+            "fx"
+          ],
+          "servers": [
+            {
+              "name": "fx",
+              "transport": "stdio",
+              "endpoint": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\.venv\\Scripts\\python.exe",
+              "args": [
+                "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\tests\\fixtures\\mcp_fixture_server.py",
+                "good",
+                "--token",
+                "‹已脱敏 24 字符›"
+              ],
+              "env": [
+                "MCP_FIXTURE_MARKER"
+              ],
+              "ok": true,
+              "tools": [
+                {
+                  "name": "mcp__fx__echo",
+                  "declared_risk": "read"
+                },
+                {
+                  "name": "mcp__fx__probe",
+                  "declared_risk": ""
+                },
+                {
+                  "name": "mcp__fx__boom",
+                  "declared_risk": "destructive"
+                },
+                {
+                  "name": "mcp__fx__write_note",
+                  "declared_risk": "destructive"
+                }
+              ],
+              "skipped": [
+                {
+                  "name": "bad name",
+                  "reason": "远端工具名不合法：'bad name'"
+                },
+                {
+                  "name": "mcp__fx__no_schema",
+                  "reason": "没有 inputSchema，参数没法校验"
+                },
+                {
+                  "name": "mcp__fx__bare_object",
+                  "reason": "inputSchema 没有 properties，参数会被静默丢弃"
+                },
+                {
+                  "name": "mcp__fx__echo",
+                  "reason": "同名工具已经注册（远端报了两个同名的）"
+                }
+              ],
+              "error": "",
+              "server_info": {
+                "protocolVersion": "2024-11-05",
+                "name": "fixture-mcp",
+                "title": "测试用的假 MCP 服务"
+              }
+            }
+          ],
+          "tools": 4,
+          "skipped": 4
+        },
+        "skills_event": {
+          "seq": 5,
+          "ts": 1790088189.774,
+          "session": "c055be956ee0",
+          "kind": "skills",
+          "trace_id": "ac063cce8b5243498744d61cc914134e",
+          "schema_version": "2.0",
+          "turn": 0,
+          "root": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\s14-ext\\refused\\skills",
+          "skills": 1,
+          "names": [
+            "demo-skill"
+          ],
+          "catalog_lines": 3,
+          "catalog_chars": 90,
+          "body_chars_total": 11,
+          "rejected": 0,
+          "cap_lines": 30
+        },
+        "secret_in_trace": false,
+        "masked_marker_in_trace": true,
+        "secret_in_redacted": false,
+        "redacted_servers": [
+          "fx"
+        ],
+        "bridge_built": true,
+        "external_tools_in_registry": [
+          "mcp__fx__boom",
+          "mcp__fx__echo",
+          "mcp__fx__probe",
+          "mcp__fx__write_note"
+        ],
+        "children_running_during_session": [
+          "fx"
+        ],
+        "children_after_close": [],
+        "system_has_external_note": true,
+        "system_has_catalog": true,
+        "catalog_costs_body_out": true
+      },
+      "granted": {
+        "mode": "auto",
+        "confirmer_called_with": [
+          "mcp__fx__write_note"
+        ],
+        "note_written": true,
+        "note_lines": [
+          "这一行应当出现"
+        ],
+        "permission_decisions": [
+          {
+            "tool": "mcp__fx__write_note",
+            "decision": "allow"
+          }
+        ],
+        "tool_calls": [
+          {
+            "name": "mcp__fx__write_note",
+            "ok": true
+          }
+        ],
+        "trace_kinds": [
+          "backend",
+          "checkpoint",
+          "llm_request",
+          "llm_response",
+          "mcp",
+          "permission",
+          "repo_map",
+          "run_end",
+          "run_start",
+          "session_snapshot",
+          "session_start",
+          "skills",
+          "tool_call",
+          "turn_start"
+        ],
+        "mcp_event": {
+          "seq": 4,
+          "ts": 1790088190.083,
+          "session": "b747daec2ec2",
+          "kind": "mcp",
+          "trace_id": "13419bc1539947bcb71d62a8dad4555f",
+          "schema_version": "2.0",
+          "turn": 0,
+          "skip_reason": "",
+          "configured": [
+            "fx"
+          ],
+          "running": [
+            "fx"
+          ],
+          "servers": [
+            {
+              "name": "fx",
+              "transport": "stdio",
+              "endpoint": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\.venv\\Scripts\\python.exe",
+              "args": [
+                "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\tests\\fixtures\\mcp_fixture_server.py",
+                "good",
+                "--token",
+                "‹已脱敏 24 字符›"
+              ],
+              "env": [
+                "MCP_FIXTURE_MARKER"
+              ],
+              "ok": true,
+              "tools": [
+                {
+                  "name": "mcp__fx__echo",
+                  "declared_risk": "read"
+                },
+                {
+                  "name": "mcp__fx__probe",
+                  "declared_risk": ""
+                },
+                {
+                  "name": "mcp__fx__boom",
+                  "declared_risk": "destructive"
+                },
+                {
+                  "name": "mcp__fx__write_note",
+                  "declared_risk": "destructive"
+                }
+              ],
+              "skipped": [
+                {
+                  "name": "bad name",
+                  "reason": "远端工具名不合法：'bad name'"
+                },
+                {
+                  "name": "mcp__fx__no_schema",
+                  "reason": "没有 inputSchema，参数没法校验"
+                },
+                {
+                  "name": "mcp__fx__bare_object",
+                  "reason": "inputSchema 没有 properties，参数会被静默丢弃"
+                },
+                {
+                  "name": "mcp__fx__echo",
+                  "reason": "同名工具已经注册（远端报了两个同名的）"
+                }
+              ],
+              "error": "",
+              "server_info": {
+                "protocolVersion": "2024-11-05",
+                "name": "fixture-mcp",
+                "title": "测试用的假 MCP 服务"
+              }
+            }
+          ],
+          "tools": 4,
+          "skipped": 4
+        },
+        "skills_event": {
+          "seq": 5,
+          "ts": 1790088190.083,
+          "session": "b747daec2ec2",
+          "kind": "skills",
+          "trace_id": "13419bc1539947bcb71d62a8dad4555f",
+          "schema_version": "2.0",
+          "turn": 0,
+          "root": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\s14-ext\\granted\\skills",
+          "skills": 1,
+          "names": [
+            "demo-skill"
+          ],
+          "catalog_lines": 3,
+          "catalog_chars": 90,
+          "body_chars_total": 11,
+          "rejected": 0,
+          "cap_lines": 30
+        },
+        "secret_in_trace": false,
+        "masked_marker_in_trace": true,
+        "secret_in_redacted": false,
+        "redacted_servers": [
+          "fx"
+        ],
+        "bridge_built": true,
+        "external_tools_in_registry": [
+          "mcp__fx__boom",
+          "mcp__fx__echo",
+          "mcp__fx__probe",
+          "mcp__fx__write_note"
+        ],
+        "children_running_during_session": [
+          "fx"
+        ],
+        "children_after_close": [],
+        "system_has_external_note": true,
+        "system_has_catalog": true,
+        "catalog_costs_body_out": true
+      },
+      "readonly": {
+        "mode": "readonly",
+        "confirmer_called_with": [],
+        "note_written": false,
+        "note_lines": [],
+        "permission_decisions": [],
+        "tool_calls": [],
+        "trace_kinds": [
+          "backend",
+          "llm_request",
+          "llm_response",
+          "mcp",
+          "repo_map",
+          "run_end",
+          "run_start",
+          "session_start",
+          "skills",
+          "turn_start"
+        ],
+        "mcp_event": {
+          "seq": 4,
+          "ts": 1790088190.315,
+          "session": "6fee3fc0234d",
+          "kind": "mcp",
+          "trace_id": "f4bb94846ba54621a002b121e385b32d",
+          "schema_version": "2.0",
+          "turn": 0,
+          "configured": [
+            "fx"
+          ],
+          "skip_reason": "只读模式：没有启动任何 MCP 服务，外部工具未装配"
+        },
+        "skills_event": {
+          "seq": 5,
+          "ts": 1790088190.315,
+          "session": "6fee3fc0234d",
+          "kind": "skills",
+          "trace_id": "f4bb94846ba54621a002b121e385b32d",
+          "schema_version": "2.0",
+          "turn": 0,
+          "root": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\s14-ext\\readonly\\skills",
+          "skills": 1,
+          "names": [
+            "demo-skill"
+          ],
+          "catalog_lines": 3,
+          "catalog_chars": 90,
+          "body_chars_total": 11,
+          "rejected": 0,
+          "cap_lines": 30
+        },
+        "secret_in_trace": false,
+        "masked_marker_in_trace": false,
+        "secret_in_redacted": false,
+        "redacted_servers": [
+          "fx"
+        ],
+        "bridge_built": false,
+        "external_tools_in_registry": [],
+        "children_running_during_session": [],
+        "children_after_close": [],
+        "system_has_external_note": false,
+        "system_has_catalog": true,
+        "catalog_costs_body_out": true
+      },
+      "bad_arguments": {
+        "is_error": true,
+        "reason": "参数校验失败：'text' 应为 string，实际是 int 工具 mcp__fx__write_note 的 schema 是 {\"mcp__fx__write_note\": \"text:string\"}（* 为必填）",
+        "note_written": false,
+        "wire_still_usable": true
+      }
+    },
+    "skills": {
+      "shipped": {
+        "root": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\skills",
+        "skills": 2,
+        "names": [
+          "add-eval-task",
+          "trace-triage"
+        ],
+        "catalog_lines": 4,
+        "catalog_chars": 240,
+        "body_chars_total": 2130,
+        "rejected": 0,
+        "cap_lines": 30,
+        "bodies": {
+          "add-eval-task": 1190,
+          "trace-triage": 940
+        },
+        "every_name_listed": true,
+        "no_body_in_catalog": true
+      },
+      "experiment": {
+        "big_body_chars": 5200,
+        "loaded_chars": 5216,
+        "catalog_chars_one_skill": 99,
+        "catalog_lines_one_skill": 3,
+        "catalog_chars_two_skills": 118,
+        "catalog_lines_two_skills": 4,
+        "row_cost_when_body_grows_by_8800": 19,
+        "resident_over_expanded": 0.019
+      }
+    },
+    "assembly_path": {
+      "call_sites": [
+        "src/miniclaude/cli/main.py:181"
+      ],
+      "count": 1,
+      "text_mentions": [
+        "src/miniclaude/agent/todo_tool.py:3",
+        "src/miniclaude/cli/main.py:181",
+        "src/miniclaude/ext/mcp.py:16"
+      ]
+    }
+  },
+  "amendments": [
+    {
+      "item": "不依赖官方 SDK 运行时",
+      "spec_said": "§3.7 只规定了 MCPBridge / RemoteTool 的接口",
+      "as_built": "自己写的 stdio 客户端（约 190 行）；官方 SDK 只作为 dev extra 存在，用途是给对端",
+      "why": "把 SDK 放进 runtime 依赖，等于把「能不能跑通」外包出去，而 §2.4 的依赖预算要的是核心功能零第三方。代价写清楚了：SDK 改了报文形状我们不会立刻知道，只能靠这条互操作臂手动重跑。"
+    },
+    {
+      "item": "只有 stdio 传输",
+      "spec_said": "MCPServerSpec 预留 transport 字段",
+      "as_built": "transport 只接受 stdio，写 sse / http 在启动时报错",
+      "why": "非 stdio 在 §7.4 顺位 2 砍掉。报错而不是忽略：「配了 sse 结果按 stdio 跑」比「配不上」难查得多。"
+    },
+    {
+      "item": "MCPBridge 不接 gate 参数",
+      "spec_said": "§3.7 代码片段写的是 MCPBridge(servers, gate)",
+      "as_built": "MCPBridge(servers, workspace, timeout)，判定住在循环的权限门那一侧",
+      "why": "bridge 只管传输与包装。判定放两处，就会出现「bridge 与 gate 各持一份档位真相」，与 §3.3 砍重复裁剪同一个理由。"
+    },
+    {
+      "item": "trace 的 mcp 事件用 skip_reason 而不是 skipped",
+      "spec_said": "§3.1 只要求「有一条装配期事件」",
+      "as_built": "skipped = 被跳过的工具条数（int）；这一整条扩展没参与的原因另起名为 skip_reason（str）",
+      "why": "同名字段两种类型会让 schema 契约失去意义，而那份契约是 S8 全部价值的来源。"
+    },
+    {
+      "item": "技能不带脚本、不读同目录文件",
+      "spec_said": "D20：只做提示词包",
+      "as_built": "SKILL.md 旁边的文件只报名字（load 的返回值里那句「未加载」），既不读也不执行",
+      "why": "一旦允许脚本，「技能」就是远程代码执行入口，D19 那套不采信逻辑要在第二条路上重做一遍。多文件引用在 §7.4 顺位 5 砍掉。"
+    },
+    {
+      "item": "读的是规范字段名",
+      "spec_said": "§3.7 写的是「远端声明的 risk_level」",
+      "as_built": "官方 SDK 不给 risk_level，给的是 annotations.readOnlyHint / destructiveHint / openWorldHint；两种形状都读，全部只进 declared_risk 展示字段",
+      "why": "互操作那一臂逼出来的：自写夹具时按 SPEC 读 risk_level 是「过得了自己的测试」，实际一个都读不到。"
+    },
+    {
+      "item": "握手是同步且串行的",
+      "spec_said": "未规定",
+      "as_built": "discover() 逐个服务起进程、握手、tools/list；单次请求超时 30s",
+      "why": "配 N 个服务就有最坏 30N 秒的启动等待，而这段时间会算进「首 token 延迟」。并发握手段在 §7.4 顺位 6。"
+    },
+    {
+      "item": "远端的图片 / 资源块不渲染",
+      "spec_said": "未规定",
+      "as_built": "_decode_content 把它们变成一句「〈image 内容块，本客户端不渲染〉」",
+      "why": "不能当没看见：模型必须知道有东西没给它，否则它会按「远端只说了这些」来推理。"
+    }
+  ],
+  "what_this_proves": "两条扩展接在同一个注册表、同一个权限门、同一份 trace 上；远端自报什么都不改变采信档位；拒绝一次外部调用之后，工作区之外那个文件确实不存在；密钥既没进子进程环境也没进 trace；技能目录的常驻成本与正文长度解耦。全部数字由本脚本产生。",
+  "what_this_does_not_prove": "① 模型在真端点下会不会滥用外部工具（引擎是 fake，剧本是我们写的）；② MCP 的 resources / prompts 两类能力，以及进度、取消、订阅（一行实现都没有）；③ 非 stdio 传输；④ 真实第三方生态的兼容面 —— SDK 那臂只有一个服务、三个工具；⑤ 多服务并发握手的耗时分布（现在是串行）。"
+}

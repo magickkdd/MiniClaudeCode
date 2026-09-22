@@ -31,12 +31,14 @@ from miniclaude.backend import (
     select_backend,
 )
 from miniclaude.config import Config, ConfigError, get_config
-from miniclaude.cli import trace_cmd
+from miniclaude.cli import ext_cmd, trace_cmd
 from miniclaude.cli.render import Renderer
+from miniclaude.ext import LoadSkillTool, MCPBridge, MCPServerSpec, MCPSpecError, SkillLoader
 from miniclaude.infra.trace import Tracer, of_session, prompt_hash, replay, summarize_records
 from miniclaude.llm.openai_compat import OpenAICompatClient
 from miniclaude.memory import MEMORY_DIRNAME, MemoryStore, RepoMap
 from miniclaude.messages import PairingError
+from miniclaude.tools.base import BaseTool
 from miniclaude.tools.registry import ToolRegistry
 from miniclaude.tools.workspace import IGNORED_DIRS, Workspace
 
@@ -50,6 +52,8 @@ HELP = """命令：
   /todos             显示当前任务清单
   /backend           显示执行后端、检查点栈与会话现场
   /undo              回退到上一个检查点（撤销最近一次写入）
+  /mcp               列出外部工具：名字、远端自报的风险、我们实际采信的档位
+  /skills            列出技能目录（正文不常驻，load_skill 按需取）
   /mode <模式>       切换权限模式：ask / auto / readonly
   /trace             显示本次会话日志位置与统计
   /exit              退出（也可以按 Ctrl-D）
@@ -63,6 +67,10 @@ HELP = """命令：
   mcc resume --list                 列出还能接着跑的会话现场（最近的在前）
   mcc resume <会话 id>              从现场继续跑完（已做过的写入不会重放）
   mcc resume --latest               续跑最近那份现场
+
+  mcc mcp                             发现并列出外部工具（会真的握手一次）
+  mcc mcp --json                       机器可读的那份
+  mcc skills                          列出技能目录与常驻/按需的字符数
 
   mcc eval --list                   列出考题与题集哈希
   mcc eval --lint                   考题自检：这道题**可能**被做对吗
@@ -88,6 +96,9 @@ class Session:
     tracer: Tracer
     workspace: Workspace
     backend: BackendChoice | None = None
+    mcp: MCPBridge | None = None
+    mcp_skip_reason: str = ""
+    skills: SkillLoader | None = None
     history: list[AgentResult] = field(default_factory=list)
 
     @property
@@ -97,6 +108,11 @@ class Session:
     @property
     def gate(self) -> PermissionGate:
         return self.agent.gate
+
+    def close(self) -> None:
+        """关掉外部工具的子进程。MCP 服务是**我们**起的，收尾就得由我们负责。"""
+        if self.mcp is not None:
+            self.mcp.close()
 
 
 def build_session(
@@ -140,10 +156,32 @@ def build_session(
         network=cfg.docker_network,
         checkpoints=use_checkpoints,
     )
+    # §3.7 的两条扩展都从这里进，**只有这一条装配路径**（`extra_tools`）：
+    # 给外部能力单开一条注册通道，权限门与 trace 就得各修一遍才追得上。
+    extra: list[BaseTool] = [WriteTodosTool(workspace, todos)]
+    bridge: MCPBridge | None = None
+    mcp_skipped = ""
+    if cfg.mcp_servers:
+        if not writable:
+            # 发现本身就是副作用：起一个第三方进程，它能在我们看不见的地方写盘。
+            # "只读模式一个字节都不变"这条承诺不该为"只是列一下工具"破例。
+            mcp_skipped = "只读模式：没有启动任何 MCP 服务，外部工具未装配"
+        else:
+            try:
+                specs = tuple(MCPServerSpec.from_mapping(item) for item in cfg.mcp_servers)
+            except MCPSpecError as exc:
+                # 配置写错 → 启动即失败。一个起不来的服务被跳过，用户会以为功能在。
+                raise ConfigError(str(exc)) from exc
+            bridge = MCPBridge(servers=specs, workspace=workspace)
+            extra.extend(bridge.discover())
+    skills = SkillLoader(cfg.skills_root)
+    skill_rows = skills.manifests()
+    if skill_rows:
+        extra.append(LoadSkillTool(workspace, skills))
     registry = ToolRegistry.default(
         workspace,
         bash_timeout=cfg.bash_timeout,
-        extra_tools=[WriteTodosTool(workspace, todos)],
+        extra_tools=extra,
         backend=choice.backend,
     )
     gate = PermissionGate(workspace=workspace, mode=mode, confirmer=confirmer or make_confirmer())
@@ -158,6 +196,14 @@ def build_session(
         RepoMap(workspace, store=store, token_cap=cfg.repo_map_tokens) if cfg.repo_map else None
     )
 
+    external_note = (
+        "# 外部工具（MCP）\n"
+        "带 `mcp__` 前缀的工具跑在我们这个进程之外，它们做了什么我们只能转述。\n"
+        "所以：每一次调用都要单独确认，AUTO 模式也不例外；被拒绝之后就换回本地工具，别重试。"
+        if bridge is not None and any(name.startswith("mcp__") for name in registry.names())
+        else ""
+    )
+
     def render_system() -> str:
         """整段 system。抽成函数是为了让 Agent 能在写文件之后重画地图，
         而不必把"仓库形状"这种会过期的东西硬编进一次性的字符串。"""
@@ -169,6 +215,8 @@ def build_session(
             tool_names=registry.names(),
             workspace=workspace,
             map_provider=(repo_map.map_for_prompt if repo_map is not None else None),
+            skills_catalog=skills.catalog(),
+            external_note=external_note,
         )
 
     system_prompt = render_system()
@@ -187,6 +235,16 @@ def build_session(
         # turn=0 = 会话装配时的那次渲染。不记这条的话，"地图第一次出现在哪"
         # 在 trace 里就查不到，而 B3 要按它归因轮数差值。
         tracer.log("repo_map", turn=0, **repo_map.stats.as_trace())
+    # 外部能力各自留一条装配期事件。**只在真配了的时候记**：一条永远为空的
+    # `mcp` 记录会把"这个机制参与了这次跑"与"它没参与"抹平，而后者才是要查的。
+    if bridge is not None:
+        # `skipped` 是"被跳过的工具条数"，`skip_reason` 是"这一整条扩展没参与的原因"：
+        # 两个都叫 skipped 会让 READONLY 那条把整数换成字符串，离线读的人无从分辨。
+        tracer.log("mcp", turn=0, skip_reason="", **bridge.stats())
+    elif mcp_skipped:
+        tracer.log("mcp", turn=0, configured=[str(s.get("name")) for s in cfg.mcp_servers], skip_reason=mcp_skipped)
+    if skill_rows:
+        tracer.log("skills", turn=0, **skills.stats())
     # 现场快照用**会话 id** 命名：一次会话一个文件，resume 与 trace 说的是同一件事。
     # 只读模式没有 recorder —— 它连 .mcc 都不该创建。
     recorder = (
@@ -239,6 +297,9 @@ def build_session(
         tracer=tracer,
         workspace=workspace,
         backend=choice,
+        mcp=bridge,
+        mcp_skip_reason=mcp_skipped,
+        skills=skills if skill_rows else None,
     )
 
 
@@ -317,6 +378,14 @@ def handle_command(session: Session, raw: str) -> str:
         return render_backend(session)
     if name == "undo":
         return do_undo(session)
+    if name == "mcp":
+        return ext_cmd.render_session_mcp(
+            session.mcp,
+            configured=[str(item.get("name")) for item in session.config.mcp_servers],
+            skipped=session.mcp_skip_reason,
+        )
+    if name == "skills":
+        return ext_cmd.render_session_skills(session.skills, root=session.config.skills_root)
     if name == "mode":
         if argument not in MODE_FLAGS:
             return f"当前模式 {agent.gate.mode.value}。可切换：{' / '.join(MODE_FLAGS)}"
@@ -470,12 +539,20 @@ def announce(session: Session) -> None:
     这是它唯一的露出机会，而降级一旦没人看见，B6 的一致性判定就失去意义。
     """
     choice = session.backend
-    if choice is None:
-        return
-    if choice.degraded:
-        session.renderer.warn(choice.note())
-    else:
-        session.renderer.dim(f"{choice.note()} · /backend 看详情")
+    if choice is not None:
+        if choice.degraded:
+            session.renderer.warn(choice.note())
+        else:
+            session.renderer.dim(f"{choice.note()} · /backend 看详情")
+    # 同一条纪律的第二处应用：后端换了要说，外部工具少装了也要说。
+    # "配了三个服务、起来两个"如果静音，用户会拿一个缺工具的房间去测 agent。
+    if session.mcp_skip_reason:
+        session.renderer.warn(session.mcp_skip_reason)
+    elif session.mcp is not None:
+        failed = [entry for entry in session.mcp.stats()["servers"] if not entry.get("ok")]
+        if failed:
+            names = "、".join(f"{item['name']}（{str(item['error'])[:60]}）" for item in failed)
+            session.renderer.warn(f"MCP 服务没起来 {len(failed)} 个：{names} · /mcp 看详情")
 
 
 def repl(session: Session, *, read: Callable[[str], str] = input) -> int:
@@ -707,25 +784,49 @@ def _resume_entry(argv: Sequence[str]) -> int:
     session = build_session(
         config=config, mode=_mode_from(args, announce_non_tty=False), verbose=args.verbose
     )
-    announce(session)
     try:
-        note = session.agent.restore_session(snapshot)
-    except PairingError as exc:
-        # 坏现场**原样留在磁盘上**：删掉它就毁掉了排查它唯一的一份证据。
-        print(f"拒绝恢复：{exc}\n现场文件保留在 {log.path_for(wanted)}，可以先看一眼再决定。", file=sys.stderr)
+        announce(session)
+        try:
+            note = session.agent.restore_session(snapshot)
+        except PairingError as exc:
+            # 坏现场**原样留在磁盘上**：删掉它就毁掉了排查它唯一的一份证据。
+            print(f"拒绝恢复：{exc}\n现场文件保留在 {log.path_for(wanted)}，可以先看一眼再决定。", file=sys.stderr)
+            return 2
+        session.renderer.dim(note)
+        result = _drive_turn(session, lambda: session.agent.resume())
+        return 0 if result.succeeded else 1
+    finally:
+        session.close()
+
+
+def _mcp_entry(argv: Sequence[str]) -> int:
+    """`mcc mcp` —— 握手并列出外部工具。它**会起进程**，所以和 `trace` 不是一类只读命令。"""
+    try:
+        config = get_config()
+    except ConfigError as exc:
+        print(f"配置不完整：{exc}", file=sys.stderr)
         return 2
-    session.renderer.dim(note)
-    result = _drive_turn(session, lambda: session.agent.resume())
-    return 0 if result.succeeded else 1
+    return ext_cmd.mcp_entry(argv, config)
+
+
+def _skills_entry(argv: Sequence[str]) -> int:
+    """`mcc skills` —— 只读一个目录，不起进程、不打网络。"""
+    try:
+        config = get_config()
+    except ConfigError as exc:
+        print(f"配置不完整：{exc}", file=sys.stderr)
+        return 2
+    return ext_cmd.skills_entry(argv, config)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """命令行入口：无参进 REPL，给了任务则跑一轮并用退出码交代结果。
 
-    `trace` / `eval` / `resume` 是子命令，放在最前面分流：`trace` 只读日志，
-    排查一次烧了 8 万 token 的会话时不该再依赖 LLM 配置可用；`eval` 自己管
+    `trace` / `eval` / `resume` / `mcp` / `skills` 是子命令，放在最前面分流：`trace`
+    只读日志，排查一次烧了 8 万 token 的会话时不该再依赖 LLM 配置可用；`eval` 自己管
     引擎与配置，fake 模式连 `.env` 都不需要；`resume` 要读现场，所以它得先于
-    positional 解析被摘走（否则 "resume" 会被当成一条任务发给模型）。
+    positional 解析被摘走（否则 "resume" 会被当成一条任务发给模型）。`mcp` 与 `skills`
+    同理 —— 不给分流的话，"mcp" 会被当成一次性任务发给模型。
     """
     raw = list(sys.argv[1:] if argv is None else argv)
     if raw and raw[0] == "trace":
@@ -734,6 +835,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _eval_entry(raw[1:])
     if raw and raw[0] == "resume":
         return _resume_entry(raw[1:])
+    if raw and raw[0] == "mcp":
+        return _mcp_entry(raw[1:])
+    if raw and raw[0] == "skills":
+        return _skills_entry(raw[1:])
 
     args = build_parser().parse_args(raw)
 
@@ -759,8 +864,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"配置不完整：{exc}", file=sys.stderr)
         return 2
 
-    if one_shot:
-        announce(session)
-        result = run_turn(session, one_shot)
-        return 0 if result.succeeded else 1
-    return repl(session)
+    try:
+        if one_shot:
+            announce(session)
+            result = run_turn(session, one_shot)
+            return 0 if result.succeeded else 1
+        return repl(session)
+    finally:
+        # MCP 服务是装配期起的：不管会话怎么结束（正常退出、/exit、异常），
+        # 子进程都不该留在宿主上。孤儿进程比孤儿代码难查。
+        session.close()

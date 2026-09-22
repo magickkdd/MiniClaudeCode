@@ -119,6 +119,10 @@ class PermissionGate:
         if self.mode is PermissionMode.READONLY:
             return Decision.DENY, f"当前是只读模式，{tool.risk_level} 级操作被禁用。"
         if self.mode is PermissionMode.AUTO:
+            if tool.external:
+                # §3.7 D19：AUTO 的语义边界是"工作区内"。远端进程能做任何我们
+                # 看不见的事，把工作区外的动作算进"工作区内自动放行"是把承诺偷偷扩大了。
+                return Decision.ASK, "外部工具（MCP）在工作区之外执行，不在自动放行的语义范围内，需要单独确认。"
             return Decision.ALLOW, "非交互模式，工作区内自动放行"
         return Decision.ASK, f"{tool.risk_level} 级操作，需要用户确认"
 

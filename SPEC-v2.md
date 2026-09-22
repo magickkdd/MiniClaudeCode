@@ -1000,6 +1000,81 @@ Skills 的架构含义是**延迟加载的提示词**：常驻只有目录（几
 
 **不实现 skill 自带脚本**（D20）。
 
+### 3.7.1 实到（S14 落地后补，2026-09-22）
+
+`ext/mcp.py` + `ext/skills.py`，S14 的测试合计 **85 例**（`test_mcp_bridge` 44 · `test_cli_ext` 20 ·
+`test_skills` 21），另外 `test_trace_contract` 的 `extended` 夹具把 `mcp` / `skills` 两种装配期事件的
+**真实产地**接进了快照（schema 现有 20 个 kind、7 份夹具）。全批 680 passed。
+
+**六处刻意不照抄规格，都是落地时规格自身接不上现实的地方：**
+
+| 规格写法 | 实到 | 为什么改 |
+|---|---|---|
+| `MCPBridge(servers, gate)` | `MCPBridge(servers, workspace, timeout)`，**不接 gate** | bridge 只管传输与包装。判定放两处就会出现"bridge 与 gate 各持一份档位真相"，与 §3.3 砍重复裁剪同一个理由 |
+| 「远端声明的 `risk_level` 不可信」 | 读 `annotations.readOnlyHint / destructiveHint / openWorldHint`（规范字段）与私有 `riskLevel`，两者**只进 `declared_risk` 展示字段**，采信值恒为 `EXECUTE` | 官方 SDK 压根不给 `risk_level` 这个字段名。按规格字面读会得到"永远读不到、于是永远像已采信"的假安全 —— 这一条是互操作臂逼出来的 |
+| `servers: list[MCPServerSpec]` | `Sequence` + `MCPServerSpec.from_mapping()` 是**语义校验的唯一产地**；config 只管 JSON 形状与重名 | 与 `BACKEND_NAMES` 同一条纪律：契约名单住 config，语义判定只有一处。否则 `{"name":"ok","transport":"sse"}` 会在两个地方各报一次、措辞还不一样 |
+| 「注册点仍是 `ToolRegistry.default(extra_tools=...)`（`registry.py:58`）」 | 同一处，但判据换成**"src 里 `ToolRegistry.default(...)` 的 ast 调用点恰好 1 处"**，由 `scripts/s14_ext_demo.py` 量 | 行号会漂，写死行号的判据只会变成"改一行代码就得改一行文档"。ast 数的是真调用点，文档字符串里那两处提及不算 |
+| 坏工具条目"跳过" | 跳过 + **逐条理由**，且非法名那条记的是**原始名**（`bad name` 而不是编一个 `mcp__fx__bad_name`） | 洗过的名字模型调不动，等于把一次拒绝伪装成一次成功。名字没能组成 `mcp__` 名，就照抄给用户看 |
+| trace 里"这条扩展没参与"的原因叫 `skipped` | 改名 `skip_reason` | `stats()` 已经用 `skipped` 表示"被跳过的工具条数"（int）。同名字段两种类型会让 §3.1 的 schema 契约失去意义，而那份契约是 S8 全部价值的来源 |
+
+**规格里没写、落地时必须有的五件**（每一件都对应一次真实的失败或乱码）：
+
+1. `_ENV_ALLOWLIST`（子进程只看得见"不起进程就起不来"的那几个键）+ `_SECRETISH`（名字像密钥的，
+   用户点名也不透传）+ `dropped_env` 留痕 —— 剔除必须报出来，否则用户只会看到"服务连不上"。
+2. `PYTHONIOENCODING=utf-8` 由我们注入子进程，客户端发送侧 `ensure_ascii=True` + `.encode("ascii")` ——
+   Windows 上远端默认 cp936，中文是在**我们这侧**被解坏的。
+3. `_fault()`：EOF 与超时的报错带上 stderr。`MCP server fx 关掉了输出` 这一句没有任何诊断价值，
+   加上 `fixture: 我不干` 才知道是服务自己拒干。
+4. `_already_in_text()`：`structuredContent` 与 `content[].text` 是同一句话时不双份进上下文 ——
+   官方 SDK 的 `-> str` 工具就是双份的（这一条同样是互操作臂逼出来的）。
+5. `discover()` 对缺 `properties` 的 schema 给理由并跳过：`_coerce()` 只放行 schema 点名的参数，
+   于是"参数全被丢掉而调用成功"是最难查的那种错。
+
+**Skills 的经济性实测住在这里**：`catalog()` 有行数预算（`MAX_CATALOG_LINES=30`），溢出时少列技能
+也保留"另有 N 个未列出"与那句"别一次全取进来"；`load_skill` 是 `READ` 级，所以 AUTO 跑批不会卡在它上面
+（`ask` 模式下它也不该问 —— 读一个本地 markdown 不是外部副作用）。`load(name)` **参数里没有路径**，
+所以"取的时候越界"这件事没有入口；越界的目录名在发现期就被 `_SAFE_NAME` 挡掉。
+
+### 3.7.2 S14 实测（`scripts/s14_ext_demo.py` → `eval/results/s14-mcp-skills.json`，2026-09-22）
+
+行 14 的原话是「接一个真实 MCP server 跑通，6 项安全测试绿」。这份证据把 6 项 + 14 项附带判据
+在**真子进程**上重新量一遍（引擎是 fake：这一段测接线与边界，不测模型能力）。**20/20 条量过并成立，
+用时 6.4s**，`verdict=pass`。对端有两个，各自证不同的事：
+
+| 对端 | 证到什么 | 关键实测 |
+|---|---|---|
+| `tests/fixtures/mcp_fixture_server.py`（自写、故意敌意） | 坏远端接得住 | 4 收 / 4 跳（逐条理由）；`shadow` 模式下远端**逐字**报 `read_file`/`write_file` → 注册成 `mcp__fx__read_file`，本地 `read_file` 仍读到盘上真内容而冒名者读不到；`exit`/`silent`/`garbage` 三臂 `close()` 之后残留进程 0 |
+| `tests/fixtures/mcp_sdk_server.py`（**官方 SDK 写的**） | 「真实 MCP server 跑通」这一句 | `sdk-fx @ 2024-11-05` → 3 个工具；`inputSchema` 由第三方从函数签名生成（`properties = ['text','times']`）；它自报 `readOnlyHint` → `declared_risk='read'` 而采信仍是 `execute`；中文往返 `'你好 MCP 你好 MCP'` 无损 |
+
+安全侧最值钱的六条：
+
+| 判据 | 实测 |
+|---|---|
+| AUTO 下外部工具仍问、本地写仍放行（§6.3-1） | `外部 ask / 本地写 allow`，理由「外部工具（MCP）在工作区之外执行，不在自动放行的语义范围内，需要单独确认。」；`confirmer=None` 时 `authorize=False` |
+| **被拒的那一次在工作区之外没有留下文件** | `write_note` 的落盘路径由 `MCP_FIXTURE_MARKER` 决定、在工作区之外；拒绝臂 → 文件不存在且 trace 里**没有** `tool_call`（只有那条 `permission/deny`）；点同意臂 → 同一支工具写出 `['这一行应当出现']`。两臂只差人的一个回答，这才叫对照组 |
+| 宿主 env 不外泄 | 点名 `LLM_API_KEY` + `MCP_FIXTURE_NAMED` + 一个不存在的名字 → 子进程 `has_api_key=false`、`has_pythonpath=false`、`has_path=true`、点名的普通变量拿到了；`dropped_env = ['LLM_API_KEY','MCP_DEFINITELY_NOT_SET_ANYWHERE']` |
+| 密钥不进 trace | 服务 args 里的 `--token sk-live-…` → trace 全文含明文 `false`、含「已脱敏」`true`，`redacted()["mcp_servers"] == ['fx']`（名字照留，否则查不到连的是谁） |
+| 校验在上线之前 | `text=12` → 「参数校验失败：'text' 应为 string，实际是 int」，**不落盘**，且之后 `echo` 仍通（连接没被这次坏参数弄坏） |
+| 只读模式结构性无副作用 | READONLY 臂 `bridge` 根本没建、registry 里 `mcp__` 工具 `[]`、起了的进程 `[]`，事件里只有 `configured` + `skip_reason`，没有运行计数 |
+
+延迟加载那笔账（`skills/` 是仓库自带的两个技能）：
+
+| 项 | 实测 |
+|---|---|
+| 常驻目录 vs 展开正文 | 一个正文 **5,200** 字符的技能，目录只占 **99 字符 / 3 行**；再加一个技能，目录**多 19 字符**（与正文长度无关）；常驻/展开 = **0.019** |
+| 仓库自带的 `skills/` | 2 个技能（`add-eval-task`、`trace-triage`）· 目录 4 行 / 240 字符 · 正文合计 2,130 字符（1,190 + 940）· 目录里不含任何正文行 |
+| 装配路径 | `ToolRegistry.default(...)` 在 src 里的 ast 调用点 = **1 处**（`cli/main.py:181`），外部工具与 `load_skill` 都从 `extra_tools` 进 |
+
+**没证到的**（写在结果文件的 `what_this_does_not_prove` 里，别只抄上面那张表）：① 真端点下模型会不会
+**滥用**外部工具（剧本是我们写的）；② MCP 的 `resources` / `prompts` 两类能力与进度、取消、订阅
+（实现里一行都没有）；③ 非 stdio 传输（§7.4 顺位 2）；④ 真实第三方生态的兼容面 —— SDK 那臂只有
+一个服务、三个工具；⑤ 多服务并发握手的耗时分布（现在是串行，最坏 30s × N）。
+8 条 as-built 取舍全部记在同一份 JSON 的 `amendments` 里。
+
+**D26 的对照文档**：`docs/framework-equivalence.md`（78 行）—— registry+loop 与 LangGraph StateGraph
+逐格对齐，含"我们真的缺的四件"与"它的卖点对我们是负资产的四件"，并给出迁移时的三个硬冲突点
+（权限默认值、幂等账本、度量产地）。JD 第 6 项的回答形态从"用过 X 框架"换成了"能说出不用它买到了什么"。
+
 ## 3.8 Multi-agent — 只做 verifier（S15，4h）
 
 ```python
@@ -1203,6 +1278,11 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 ## 6.3 安全边界（v2 新增攻击面）
 
 1. **MCP 远端工具**：默认 `EXECUTE` 风险 + 命名空间前缀 + 不得覆盖本地工具名（测试钉）。
+   → **实到（S14，§3.7.2）加了五条规格没写的**：① 子进程 env 白名单，名字像密钥的即使被用户点名也不透传，
+   且剔除要留痕（`dropped_env`）；② 服务配置 `args` 里 `--token sk-…` 按**位置**脱敏（`_scrub` 只认值的形状，
+   认不出"这一位是上一条旗标的值"）；③ **只读模式连发现阶段都不起进程** —— 起一个第三方进程本身就是"变"；
+   ④ 外部工具在 `auto` 下仍要问（AUTO 的承诺是"工作区内自动放行"，外部不在那个集合里），
+   没有确认渠道时保守拒绝；⑤ 判据落在盘上而不是日志上：被拒的调用不许在**工作区之外**留下文件。
 2. **`.mcc/` 记忆污染**：记忆条目由 agent 观察产生，一次错误观察会持续误导后续会话。因此 ① 记忆内容永不进 diff 之外的可执行路径；② `TEST_COMMAND` 类笔记**只展示、不自动执行**；③ v1 对 episodic memory 的顾虑（v1 §3.4）依然成立，本次仍不实现跨会话"经验教训"。
 3. **快照泄漏**：shadow git 在工作区内 → 必须落 `.gitignore`，且**不得包含 `.env`**（`PROTECTED_NAMES` 已有，`permissions.py:40`；快照用同一份排除表）。
 4. **Docker 逃逸的反面**：沙箱的默认配置必须 `--network none`、只读根文件系统 + 可写工作区卷。放宽要显式配置，且 CLI 要打印当前沙箱参数。
@@ -1238,7 +1318,7 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 |---|---|---:|---|
 | ~~**12**~~ ⛔ | §3.5 只读并发（先由数据确认可并行轮占比） | 5h → **实际投入约 1h 测量后砍** | **B5**；7 项并发测试绿；若可并行轮 <20% 则整段推 Tier 3 → **实到（2026-09-22，`eval/results/s12-parallel-share.json`）**：轮占比合计 21.5% 过线、最新一层 b3-live 单独看 19.8% 差一线；第二道闸（B5 的墙钟 p50）实测上限 **0.011%**，与 15% 差三个数量级，fake 引擎也仅 0.127% → **整段推 Tier 3**，Tier 2 交付物改为只剩 B6。测法与读法见 §3.5.1 |
 | ~~**13**~~ ✅ | §3.6 `ExecutionBackend` + Docker + 快照/`/undo` + durable resume | 10h → **实到 2026-09-22** | **B6**；`mcc resume` 杀掉进程后续跑且不重放写操作 → **实到**：协议两实现 + 影子 git 检查点 + `/undo` + `mcc resume`/`--list`/`--latest` + `MEMORY_DIR` 七消费者收敛，S13 合计 **115 例测试**、全批 595 passed。B6 判定层 **12/12 格一致、8 条前提全绿**（`eval/results/b6-backend-ab.json`），沙箱层**未测**（本机无 docker，替身跑在宿主上）。签名三处改动与全部边界见 §3.6.1 / §3.6.2 |
-| **14** | §3.7 MCP bridge + Skills | 6h | 接一个真实 MCP server 跑通，6 项安全测试绿 |
+| ~~**14**~~ ✅ | §3.7 MCP bridge + Skills | 6h → **实到 2026-09-22** | 接一个真实 MCP server 跑通，6 项安全测试绿 → **实到**：S14 合计 **85 例测试**（`test_mcp_bridge` 44 · `test_cli_ext` 20 · `test_skills` 21）+ `mcp`/`skills` 两种事件的真实产地进 schema 快照（20 kind / 7 夹具）。`scripts/s14_ext_demo.py` → **`eval/results/s14-mcp-skills.json`：20/20 条量过并成立、verdict=pass、6.4s**；对端两个（自写敌意夹具 + **官方 SDK 写的服务**，后者才对得起"真实"两个字），6 项安全判据逐条有数字，见 §3.7.2。诚实边界：`resources`/`prompts`/取消/订阅零实现，非 stdio 砍到 §7.4 顺位 2，SDK 那臂只有一个服务三个工具。取舍与偏差见 §3.7.1，D26 的框架对照在 `docs/framework-equivalence.md` |
 | — | A1 换成真实开源仓库（网络解禁后）+ 任务集扩到 30 | 4h | B1 在真仓库子集上重跑 |
 
 ## 7.3 Tier 3 — 前沿但克制（15h）

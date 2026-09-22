@@ -11,7 +11,10 @@ dependencies = [
 [project.optional-dependencies]
 # rich 只用于终端美化；缺失时渲染层自动退化成纯文本。核心功能不依赖它。
 pretty = ["rich>=13.7"]
-dev = ["pytest>=8.0", "rich>=13.7"]
+# 官方 MCP SDK 只在**开发期**用来写对端（`tests/fixtures/mcp_sdk_server.py`）：
+# 我们的客户端不依赖它（stdio JSON-RPC 是自己实现的，见 SPEC §3.7 as-built），
+# 但"跟生态真的接得上"这件事必须有第三方实现来证明，不能只跟自己写的替身说话。
+dev = ["pytest>=8.0", "rich>=13.7", "mcp>=1.0"]
 
 [project.scripts]
 mcc = "miniclaude.cli.main:main"

@@ -2,7 +2,7 @@
 
 一个跑在终端里的软件工程 Agent：你用自然语言下达开发任务，它自己读代码、改文件、跑命令、看测试结果，反复直到做完或者明确说清楚它卡在哪。
 
-它不是一个"调 API 的 demo 骨架"，而是一套**可验证闭环**：核心循环、权限边界、工具层、会话轨迹、评测证据，每一层都有测试或独立判据撑着。项目按 [`SPEC.md`](SPEC.md) 逐阶段实现，SPEC 的决策记录（D1–D8）解释了每个取舍的原因。
+它不是一个"调 API 的 demo 骨架"，而是一套**可验证闭环**：核心循环、权限边界、工具层、会话轨迹、评测证据，每一层都有测试或独立判据撑着。项目按 [`SPEC.md`](SPEC.md) 与 [`SPEC-v2.md`](SPEC-v2.md) 逐阶段实现，SPEC 的决策记录（v1 的 D1–D8、v2 的 D9–D26）解释了每个取舍的原因。
 
 下面这段是 `demos/results/codegen.fake.md` 里的真实终端输出（Demo 1，任务只有一句话："创建一个 Python 计算器项目，并编写测试"）：
 
@@ -23,7 +23,7 @@
 
 注意最后那句自我更正：**优先级 bug 是测试抓出来的，不是模型看出来的**。这就是 `run_tests` 作为判据而不是装饰的意义。
 
-当前状态：**480 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2 的 fake 侧**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，12 条判据与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)；真实端点那 5 次今天签不了字 —— 试跑被 `HTTP 429`（免费档速率限制）打断，过程与一个已修的 `--only` bug 记在 [`eval/results/b2-live-blocked.json`](eval/results/b2-live-blocked.json)，所以这一条验收线只算完成一半；S11 交付了仓库符号地图与 `.mcc/` 工作记忆（见 §4.8）：两臂只差 `--no-repo-map` 一个开关，7 条机制判据（地图**换掉**目录树、地图计入 `context_peak`、零额外 LLM 调用、两臂 system 不同）离线全绿；真实模型那半条跑完了，结论是 **B3 未达成** —— token 侧 ✓（`context_peak` p95 涨幅 +5.4%，线是 ≤15%），轮数侧 ✗（`steps_to_success` 中位 6.0 → 6.0，降幅 0%，线是 ≥20%），通过数还从 14/18 掉到 13/18。这是一次有效的证伪而不是无效实验（脚本先证明了配对成立），20% 这条线保持原样，重测计划记在 SPEC §7.3-5，全部数字见 [`eval/results/b3-repomap-ab.json`](eval/results/b3-repomap-ab.json)。 S12（只读工具并发）在动手前被自己的数据闸砍进 Tier 3：可并行的只读轮只值 live 墙钟的 0.011%（§4.9）。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
+当前状态：**680 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2 的 fake 侧**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，12 条判据与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)；真实端点那 5 次今天签不了字 —— 试跑被 `HTTP 429`（免费档速率限制）打断，过程与一个已修的 `--only` bug 记在 [`eval/results/b2-live-blocked.json`](eval/results/b2-live-blocked.json)，所以这一条验收线只算完成一半；S11 交付了仓库符号地图与 `.mcc/` 工作记忆（见 §4.8）：两臂只差 `--no-repo-map` 一个开关，7 条机制判据（地图**换掉**目录树、地图计入 `context_peak`、零额外 LLM 调用、两臂 system 不同）离线全绿；真实模型那半条跑完了，结论是 **B3 未达成** —— token 侧 ✓（`context_peak` p95 涨幅 +5.4%，线是 ≤15%），轮数侧 ✗（`steps_to_success` 中位 6.0 → 6.0，降幅 0%，线是 ≥20%），通过数还从 14/18 掉到 13/18。这是一次有效的证伪而不是无效实验（脚本先证明了配对成立），20% 这条线保持原样，重测计划记在 SPEC §7.3-5，全部数字见 [`eval/results/b3-repomap-ab.json`](eval/results/b3-repomap-ab.json)。 S12（只读工具并发）在动手前被自己的数据闸砍进 Tier 3：可并行的只读轮只值 live 墙钟的 0.011%（§4.9）。S13 交付了执行后端：`ExecutionBackend` 两实现（local / docker）+ 影子 git 检查点 + `mcc resume` 的幂等续跑，**B6 达成** —— 同一批题在两后端上判定逐格一致 12/12，8 条前提全绿，而这台机器上没有 docker，所以那半条线是被一个"会真的在宿主上执行命令"的假 docker 证掉的，`container_isolation_tested: false` 就是这句话（§4.10、[`eval/results/b6-backend-ab.json`](eval/results/b6-backend-ab.json)）。S14 交付了第三方能力：`ext/mcp.py`（stdio 桥、`mcp__` 命名空间、远端自报风险一律不信）与 `ext/skills.py`（常驻只有目录、正文按需展开），§3.7 的 6 项安全测试扩到 85 项，证据脚本 **20/20 条前提全绿**、对手是"自写的敌意服务 + 官方 SDK 服务"两个（§4.11、[`eval/results/s14-mcp-skills.json`](eval/results/s14-mcp-skills.json)）；LangGraph 那一半交付的是 ≤200 行的概念对照与不用它的理由（[`docs/framework-equivalence.md`](docs/framework-equivalence.md)）。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
 
 ---
 
@@ -75,6 +75,11 @@
                         │                  │  run_tests               │
                         │                  │  workspace.py  路径锁    │
                         │                  └───────────┬──────────────┘
+              ┌─────────────────────────────────────────▼────────────┐
+              │  memory/ 工作记忆 + 符号地图   ext/ 第三方能力        │
+              │                    两者都只经 extra_tools=[…] 注入    │
+              │                    （ext: mcp.py 桥 · skills.py 目录）│
+              └─────────────────────────────────────────┬────────────┘
               ┌─────────▼──────────────────────────────▼──────────────┐
               │  messages.py（报文与 Block）· config.py（唯一读环境   │
               │  变量的地方）· infra/trace.py（JSONL 轨迹 + 密钥脱敏）│
@@ -83,7 +88,7 @@
 
 三条硬约束（违反就会让测试和 demo 失去意义）：
 
-1. **单向依赖**：`cli → agent → (tools | llm | memory) → messages/config`。`tools/` 永远不 import `agent/` —— 所以 `write_todos` 这个工具住在 `agent/todo_tool.py`，通过 `ToolRegistry.default(extra_tools=[...])` 注入，而不是塞进 `tools/`。S11 的 `memory/` 同一条规矩：它只 import `tools/workspace.py` 拿路径锁，不认识 `agent/`，地图由 `agent/loop.py` 反过来喂焦点。
+1. **单向依赖**：`cli → agent → (tools | llm | memory | ext) → messages/config`。`tools/` 永远不 import `agent/` —— 所以 `write_todos` 这个工具住在 `agent/todo_tool.py`，通过 `ToolRegistry.default(extra_tools=[...])` 注入，而不是塞进 `tools/`。S11 的 `memory/` 同一条规矩：它只 import `tools/workspace.py` 拿路径锁，不认识 `agent/`，地图由 `agent/loop.py` 反过来喂焦点。S14 的 `ext/` 是同一条规矩的第二次应用：`RemoteTool` 与 `LoadSkillTool` 都是普通 `BaseTool`，权限门与 trace 因此**不需要为外部能力改一行**。
 2. **一个装配点**：`build_session()` 同时服务 REPL、`--task` 一次性模式和 `demos/run_demo.py`。否则"demo 跑通的东西"和"用户手上跑的东西"就不是同一个东西。
 3. **CLI 层零业务逻辑**：本文件里没有 `while` 循环控制 Agent，交互归 CLI，控制归 `agent/loop.py`。
 
@@ -171,6 +176,10 @@ echo $?        # 0 = COMPLETED，1 = 其他终止原因
 | `/tools` | 工具名 + 风险级别 + 一行说明 |
 | `/context` | 消息条数、估算 token / 预算、端点上次实测 prompt_tokens、累计 token / 上限、轮数 |
 | `/todos` | 当前任务清单 |
+| `/backend` | 执行后端 + 检查点栈 + 会话现场三合一面板（§4.10）|
+| `/undo` | 回退到上一个检查点。撤的是磁盘，**对话历史不倒带** |
+| `/mcp` | 外部工具清单：名字、远端自报的风险、我们实际采信的档位（§4.11）|
+| `/skills` | 技能目录（正文不常驻，`load_skill` 按需取）|
 | `/mode ask\|auto\|readonly` | 切权限模式 |
 | `/trace` | 会话日志位置 + 轮数/工具数/报错数/终止原因 |
 | `/exit` | 退出（Ctrl-D 同效） |
@@ -212,6 +221,13 @@ Ctrl-C 的语义是**放弃当前输入但保留历史**：中断不该毁掉已
 | `REPO_MAP_TOKENS` | 1500 | 地图的 token 预算（纯预算，至少 1；`<1` 在 config/CLI/runner 三处各自拒绝）。它**计入** `context_peak`，所以 B3 的第二条判据量的是含地图的口径 |
 | `LLM_REQUEST_TIMEOUT` | 120 | HTTP 超时 |
 | `TRACE_PATH` | 空 | 会话 JSONL 落盘位置 |
+| `EXECUTION_BACKEND` | `local` | `local` / `docker` / `auto`。默认不是 `auto`：那会让同一个 `.env` 在不同机器上跑出不同后端，而 B6 问的恰恰是"换后端换不换结论"（§4.10）。打错的名字启动即失败 |
+| `DOCKER_IMAGE` | `python:3.12-slim` | `DockerBackend` 用哪个镜像 |
+| `DOCKER_NETWORK` | `none` | 空串 = 不传 `--network`（走宿主网络），仅本地排障用 —— 默认无网络是沙箱语义的一部分 |
+| `CHECKPOINTS` | 1 | 设 `0` 不建影子 git（只读演练与容器内跑批用），同时 `/undo` 会说清楚为什么不能用 |
+| `MEMORY_DIR` | `.mcc` | 记忆 / 快照 / 会话快照的**唯一**落盘目录名，七个消费者一起跟上（§4.8）。`../outside` 这类敌对值启动期拒绝 |
+| `MCP_SERVERS` | 空 | JSON 数组，每项 `{"name","endpoint","args","env"}`；空 = 一个外部工具都不接。形状在 `config.py` 校验、语义在 `MCPServerSpec.from_mapping`，**只有一个产地**（§4.11）|
+| `SKILLS_DIR` | `skills` | 技能根目录。目录不存在就等于没有技能（不报错、不装配 `load_skill`）|
 
 ### 4.6 批量评测（`mcc eval`）
 
@@ -353,11 +369,38 @@ mcc resume --list && mcc resume --latest        # 崩了之后接着跑
 
 第一次试跑时 B6 报出过一处分歧，凶手是替身自己：`-v` 按**第一个**冒号切分，Windows 的 `D:\...` 当场被切成空挂载目录，于是"容器"在替身自己的 cwd 里跑了整套仓库测试然后超时。它表现成"两个后端结论不同"，实际两臂跑的根本不是同一份代码。前提清单里"容器的工作目录就是这一题隔离出来的那份目录"是这次加的，加完立刻红、修完才绿 —— **一致性判据必须连自己的测量工具一起怀疑**，否则 B6 会通过一个假分歧失败、也会通过一个假一致成功（后者更糟，所以降级臂默认不产出一致率，必须 `--allow-degraded` 显式声明）。
 
+### 4.11 把第三方能力接进来：MCP 桥与按需加载的技能（`ext/`，S14）
+
+JD 第 6 项写的是"LangGraph / MCP 生态"。我们没有用 LangGraph（理由和代价的逐条对照在 `docs/framework-equivalence.md`，78 行），但 MCP 这一半是能落地的机制，而它真正的考点不是"能不能连上"，是**连上之后谁信谁**。
+
+**三条硬要求（SPEC §3.7）**：① 远端工具一律改名成 `mcp__<server>__<tool>` 才进注册表 —— 一个远端报出 `read_file` 也覆盖不了本地那个（实测：远端广告 `['read_file','write_file']`，注册成 `['mcp__fx__read_file','mcp__fx__write_file']`，本地 `read_file` 仍读出磁盘真内容，冒名者只回一句"〈远端的 read_file，不是本地那一个〉"）；② **远端自己声明的风险等级不可信**（D19）—— 它三个工具里报了 `read`/`read`/`destructive`，我们三条全部采纳 `execute`，声明值只作为 `declared_risk` 显示出来给人看；③ 远端工具走的是**同一个** `BaseTool.invoke()` 校验链，参数不合法在出网之前就失败（`text=12` → 「参数校验失败：'text' 应为 string，实际是 int」，盘上没写、连接还能继续用）。
+
+**权限闸门**：AUTO 模式对本地写是 `allow`、对 `mcp__` 外部工具是 `ask`，理由是「外部工具（MCP）在工作区之外执行，不在自动放行的语义范围内，需要单独确认。」这句不是装饰 —— 证据脚本里那个 `write_note` 工具把文件写到**工作区之外**（本地路径锁完全管不到它），拒绝臂的结果是"工作区外没有那个文件 + trace 里没有 `tool_call` 记录（只有 `permission/decision=deny`）"，授权臂才落下 `['这一行应当出现']`。**READONLY 更硬：连桥都不建**，`extra` 里一个外部工具都没有，`mcp` 事件带 `skip_reason=只读模式：没有启动任何 MCP 服务，外部工具未装配` —— 因为"发现"本身就要起一个第三方进程，那是副作用，不该为"只是列一下工具"破例。
+
+**只有一条装配路径**：外部能力全部经 `ToolRegistry.default(extra_tools=...)` 进来，`main.py:181` 是唯一的调用点（用 ast 数出来的，不是 grep —— 文本里还有 2 处只是文档字符串提到）。开第二条通道的话，权限门与 trace 就得各修一遍才追得上。
+
+环境边界同样是被测出来的而不是被承诺的：子进程 `has_api_key=false`、`has_pythonpath=false`、`has_path=true`（不给 PATH 就没法起解释器），点名要的 `MCP_FIXTURE_MARKER` 才透传，`dropped_env=['LLM_API_KEY','MCP_DEFINITELY_NOT_SET_ANYWHERE']`。握手参数里带的密钥在 trace 里是 `‹已脱敏 24 字符›`，`config.redacted()` 只回服务名 `['fx']`。服务崩/沉默/吐垃圾都有去处：退出 → 「MCP server fx 关掉了输出（进程退出码 …）：fixture: 我不干」（子进程的 stderr 被带进原因里），不回答 → 「回答超时（3s）」，而 `close()` 之后 `children_after_close=0` —— 一个起不来的服务被跳过时是**明确报错**，不是静默少几个工具让用户以为功能还在。
+
+另一半是**技能**：一个技能 = 一个目录里的一个 `SKILL.md`，system 里只放目录（名字 + 一句话），正文要 `load_skill` 按需展开。这套经济性是被数字钉住的：一份 5,200 字符的正文，目录只有 **99 字符 / 3 行**；再加第二个技能目录只贵 **19 字符**（正文涨了 8,800 字符）—— 常驻目录 / 展开后 = **0.019**。仓库自带的 2 个技能：目录 4 行 240 字符，正文合计 2,130 字符。**不读技能自带的其他文件、不执行技能脚本**（D20），同目录有别的文件就只报名字。
+
+```bash
+mcc mcp                       # 发现并列出外部工具（会真的握手一次）；--json 给机器读的那份
+mcc skills                    # 技能目录 + 常驻/按需的字符数
+/mcp  /skills                 # REPL 里同名的两条：前者逐工具列出"远端自报风险 vs 我们采信的档位"
+MCP_SERVERS='[{"name":"fx","endpoint":"python","args":["server.py"],"env":["TOKEN"]}]' mcc -y "…"
+```
+
+**实到：20 / 20 条前提全绿，verdict=PASS，6.4s**（`scripts/s14_ext_demo.py` → `eval/results/s14-mcp-skills.json`），并且是**对着两个对手**量的：自写的敌意 fixture（故意叫 `"bad name"`、故意缺 `inputSchema`、故意在风险字段上撒谎），以及一个用**官方 SDK** `FastMCP` 写的正常服务（`sdk-fx @ 2024-11-05`，`properties=['text','times']` 由 SDK 生成而不是我们手写，`tools/call` 回来的是 `TextContent` dataclass 而不是 dict，中文 `你好 MCP` 原样往返）。只测前者，"解析正确"完全可能只是"我自己的两边错得一致"。
+
+去重后 4 个工具采纳、4 个跳过并各带原因：`远端工具名不合法：'bad name'` / `没有 inputSchema，参数没法校验` / `inputSchema 没有 properties，参数会被静默丢弃` / `同名工具已经注册（远端报了两个同名的）`。后三条都是**实测逼出来的**：`tools/base.py::_coerce` 会静默丢掉没在 `properties` 里点名的参数，所以一个没有 `properties` 的 schema 必须整条不装配，否则"校验过了"意味着"什么都没校验"。
+
+**这条线没测到的是**：真第三方生态服务（只有自己的两个）、HTTP/SSE 传输（按 §7.4 顺位 2 砍到 Tier 3）、技能自带脚本（D20 明确不做），以及"模型会不会主动去 `load_skill`"—— fake 引擎里取技能是剧本写好的，真实分布要看 live。
+
 ---
 
 ## 5. 工具清单
 
-模型看到的共 8 个工具（7 个住在 `tools/`，`write_todos` 住在 `agent/todo_tool.py`，见 §2 的依赖约束）。风险级别决定它们在权限模式下的待遇。
+模型看到的默认是 9 个工具（7 个住在 `tools/`，`write_todos` 住在 `agent/todo_tool.py`，`load_skill` 住在 `ext/skills.py`，见 §2 的依赖约束）。`load_skill` 只在技能目录非空时装配；接了 MCP 之后每个远端工具再多出几行，见 §4.11。风险级别决定它们在权限模式下的待遇。
 
 | 工具 | 风险 | 要点 |
 |---|---|---|
@@ -369,6 +412,8 @@ mcc resume --list && mcc resume --latest        # 崩了之后接着跑
 | `bash` | execute | 工作区根目录执行，返回退出码 + 合并输出。Windows 下优先走 Git Bash |
 | `run_tests` | execute | 跑 pytest 并结构化返回：通过/失败计数、失败用例名、精简 traceback |
 | `write_todos` | read | 多阶段任务的清单，整体替换语义。状态存在 `agent/planner.py`，每轮回灌进系统提示 |
+| `load_skill` | read | 按名字取一个技能的正文。system 里只有目录，正文按需展开（§4.11）|
+| `mcp__<server>__<tool>` | execute | 第三方进程里的工具。**风险档位不接受远端自报**（D19），AUTO 模式也要单独确认（§4.11）|
 
 `is_error` 的语义是一条刻意的区分：**工具自己失败**（路径不存在、参数非法、端点拒收）为 `true`；**工具成功观测到的失败**（测试红了、命令退出码非 0）为 `false`。这样 `tool_error_rate` 才是"Agent 用得顺不顺"的指标，而不是"任务难不难"的指标。
 
@@ -565,7 +610,7 @@ live 那次（`demos/traces/red-tests.live.jsonl`，6 轮 13 次调用）的路�
 ## 8. 测试
 
 ```bash
-python -m pytest -q                # 595 passed
+python -m pytest -q                # 680 passed
 python -m pytest tests/test_loop_with_fake_llm.py -q
 python -m pytest tests/test_eval_runner.py tests/test_eval_cli.py -q   # 评测层（不联网）
 python scripts/b4_label_check.py   # 失败模式标签的人工核对，退出码 0 才算过
@@ -573,6 +618,7 @@ python scripts/b2_compact_ab.py    # B2 三臂 A/B + 12 条判据，退出码 0 
 python scripts/b3_repomap_ab.py    # B3 两臂 A/B：机制判据离线核，因果两条判据要 --live
 python scripts/probe_parallel_share.py  # S12 的数据闸：盘上轨迹里可并行的轮占多少、值多少毫秒（§4.9）
 python scripts/b6_backend_ab.py    # B6 两臂 A/B：docker 臂降级时不产出一致率、直接退 1（§4.10）
+python scripts/s14_ext_demo.py     # §3.7 的 20 条前提：对着两个 MCP 对手量桥与技能（§4.11）
 mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 ```
 
@@ -607,6 +653,9 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | `test_trace.py`（10） | 落盘与脱敏、replay 容忍非对象 JSON、summarize 只读已记录的字段 |
 | `test_context.py`（10） | 估算与实测校准、压力分档 |
 | `test_trace_contract.py`（11） | **度量契约**：每个报表键都有生产者、发起数≠执行数、在线与离线分类共用同一份定义、schema 快照、`output_chars` 只能从 `tool_call` 记录加出来（含"省略量为 0 是真算了 0"这条）、"孤儿键"检测器自己能抓到 planted 样例 |
+| `test_mcp_bridge.py`（44） | §3.7 的三条硬要求逐条钉：远端广告 `read_file` 也覆盖不了本地那个（前缀隔离 + 本地仍读出真磁盘内容）、远端自报 `read`/`destructive` 一律采纳 `execute` 而声明值只做展示、参数校验在**出网之前**（`text=12` 拒、连接还能用）、`MCP_SERVERS` 形状与语义各一个产地、子进程 env 白名单（`LLM_API_KEY` 不透传、点名才给）、握手参数里的密钥不进 trace、服务崩/沉默/吐垃圾各自的原因带 stderr 且 `close()` 后不留子进程、没有 `properties` 的 schema 整条不装配、**官方 SDK `FastMCP` 服务与自写敌意服务两条发现路径共用同一份断言**（中文往返、`TextContent` dataclass 而不是 dict） |
+| `test_skills.py`（21） | 目录与正文分家：5,200 字符正文渲出 3 行目录（**长度与正文无关**这条由测试自己造两个技能量出来，不是看着像）、超预算时宁少列一个技能也不丢掉成本提示、技能名进不了安全字符集就不装（`load_skill` 按名字取，参数里没有路径就没有越界）、同目录别的文件只报名字不读不执行（D20）、frontmatter 手写解析不引 YAML（未闭合的头整篇当正文） |
+| `test_cli_ext.py`（20） | 装配只有一条路径：`build_session` 里 MCP/技能都从 `extra_tools` 进、READONLY 下桥根本不建（`skip_reason` 非空且外部工具为 `[]`）、AUTO 对 `mcp__` 是 ask 而对本地写是 allow、**被拒的远端调用在盘上不留副作用**（写到工作区之外的那个文件不存在、trace 里只有 `permission/deny` 没有 `tool_call`）、授权臂作为对照真落一行、`mcp`/`skills` 两条事件的字段集合与 schema 契约对齐 |
 | `test_hanoi.py`（6） | 外部引入的算法测试，与 Agent 主线无关，保留原样 |
 
 评测层那六个文件用的是 `tests/test_eval_runner.py` 里的**临时玩具题集**（一个算错的 `add`），不依赖 `eval/fixtures` 的 24 道真考题 —— 考题内容改了不需要跟着改测试，而跑批器自己的契约仍然被钉住。真题集只在 `test_eval_taskset.py` 里被结构性地检查（题面不泄漏答案、判据齐不齐）。
@@ -624,6 +673,8 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 - **符号地图只认 Python、只认 `ast` 能看出来的东西。** 装饰器背后的动态注册、`__all__` 之外的字符串路由、yaml/toml 里的符号都看不见；`REPO_MAP=0` 时退回的仍是那棵固定 30 行、广度优先的目录树，深目录尾部一样要靠模型自己 `find_files`。跨进程缓存命中实测 27.9~99.4ms（最后一次 36.8ms），没达到 SPEC §6.2 的 ≤5ms 那条线 —— 同实例的进程内 memo 是 4.0~9.4ms，那条达标（原因与口径见 `eval/results/b3-repomap-ab.json` 的 `amendments`）。
 - **只读工具并发没做（SPEC v2 的 S12 被数据砍进 Tier 3）。** 不是遗漏：可并行的轮里平均只值 2.9 毫秒，线程池开到无限大也只省 live 墙钟的 0.011%（§4.9）。所以 `_run_tools()` 仍是单循环、结果顺序即声明顺序，`MAX_PARALLEL_READS` 这个旋钮在 `config.py` 里根本不存在 —— 不生效的配置项比缺失的配置项更坏。
 - **`DockerBackend` 的真实容器路径一次也没跑过。** 这台机器上没有 docker，B6 是用一个**会真的在宿主上执行命令**的假 `docker` 替身跑出来的：被证明的是命令行构造、降级不静默、两臂判定一致（12/12）与 rev 共用，**没被证明的是文件隔离、网络隔离、镜像内容**（`eval/results/b6-backend-ab.json` 里 `container_isolation_tested: false`）。所以"这个 agent 能在沙箱里跑"目前是**接口层的事实**，不是运行时的事实；真 docker 到位后原样重跑 `scripts/b6_backend_ab.py` 才算补上。附带一条：`docker run --rm` 每条命令付一次容器启动，本项目里命令只占墙钟 6~10%，延迟付得起，但这笔交换在评测语义上值不值，替身答不了。
+- **MCP 只测了 stdio，两个对手都是自己的进程。** §4.11 那 20 条前提证明的是命名空间隔离、风险不自报、出门前校验、env 白名单、降级不静默与被拒无副作用 —— 对手一个是自写的敌意 fixture、一个是用官方 `FastMCP` 写的正常服务，**没有连过任何一个真第三方服务**（连不上是网络策略，不是机制缺口，但结论因此只到"我们的客户端按协议办事"这一层）。HTTP/SSE 传输按 SPEC §7.4 顺位 2 砍进 Tier 3；技能自带的脚本明确不读不执行（D20），所以"技能=提示词包"是能力上限而不是待办。另外"模型会不会**主动**去 `load_skill`"没测：fake 引擎里那次取用是剧本写好的，真实分布要看 live。
+- **框架对照是文档，不是移植层。** `docs/framework-equivalence.md` 说明了我们与 LangGraph 的概念对应关系和缺的东西（`Send` 动态分发、`get_state_history` 的任意回溯），但**没有**实现它的接口 —— 迁移表里三处硬冲突（权限默认值、幂等台账、度量产地）是"真要换需要先解的结"，不是"已经兼容"。
 - **live 数字不可复现。** 同一任务重跑轮数会漂移；证据文件因此各自记录自己那一次，不做"平均"。
 - **端点行为依赖。** `tools` 字段偶发被吞，所以工具清单在系统提示里又列了一遍。
 - **`rich` 是可选依赖**，缺失时渲染层自动退化成纯文本，功能不变。
@@ -658,6 +709,9 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | 16 | SPEC §3.6 的接口签名落地时兜不住真实需求（三处） | `exec(command: str)` 分不清"该过 shell 的字符串"与"该走 execv 的 argv"；`snapshot() -> str` 让"没拍成"与"拍了但 rev 是空串"在 trace 里长得一样；检查点若按后端各存一份，会出现跨臂时间旅行 | §3.6 的签名以实到为准：`Command = str \| Sequence[str]`、`(rev, 原因)` 二元组、两臂共用同一份宿主侧 `Checkpointer` | 已在 SPEC §3.6.1 用表格逐条记明改动与理由 |
 | 17 | "崩在批次中间"能被剪出无数种形状，但只有一种是真实现场 | 中断只发生在一条助手消息声明了 N 个 tool_use、结果回填到第 k 个的时刻；"中间断裂""结果多余"都是手写出来的损坏，按可恢复处理就等于替用户猜语义 | 明确契约：`restore_session` **只承认**"前缀全配对 + 末条助手消息零结果"这一种破损，其余一律拒绝并把坏现场留在盘上 | 写进 §3.6.1 与 `test_resume`（`a broken middle is refused and left on disk`）；测试助手 `crash_scene` 的 `keep=2` 因此是契约的一部分，不是随手挑的下标 |
 | 18 | B6 的措辞预设了"有两个能跑的后端"，而这台机器上只有一个 | 没有 docker 就只有两种选择：整条验收线挂"待环境"，或用替身把**能离线证明的部分**证掉、把不能的部分写成字段 | 允许，但必须自己划清边界：脚本先证明前提（docker 臂真的用上 docker、命令行拼对、容器 cwd 对、env 没漏），任一条不成立就不产出一致率 | 结果文件里 `container_isolation_tested: false` + `what_this_proves` / `what_this_does_not_prove` 两栏；README §9 同一条局限原样写着 |
+| 19 | SPEC §3.7 说"`MCPBridge` 构造时不接受 `gate`，所以没接权限门的会话里远端工具照样能跑"—— 这条描述与真实的装配方式不符 | 桥在 `build_session` 里装配，而那里**永远**有权限门；"没接门"这个状态在 CLI 路径上不存在，为它写一条测试就是测一个走不到的分支 | 把 §3.7 的第 6 项安全测试改成可证的形态：`RemoteTool` 不携带任何绕过门的字段 + `tool.external` 在 AUTO 下仍 ask | 已在 SPEC §3.7.1 的实到表里逐条记明（6 项偏差），"闸门是装饰"这条改成了盘上副作用判据（§4.11） |
+| 20 | `_coerce` 会静默丢掉没在 `inputSchema.properties` 里点名的参数，于是"没有 properties"的远端工具看起来装配成功、实际**任何参数都传不过去** | 装配期只查了"有没有 inputSchema"，没查它里面有没有 properties；一个裸 `{"type":"object"}` 通过校验然后吃掉全部入参 | 没有 `properties` 的 schema 整条不装配，并把原因写进 `skipped` | 发现第 3 条跳过原因；证据脚本 4 采纳 / 4 跳过里能数到它 |
+| 21 | 只对自己的 fixture 量"解析正确"是不成立的证据 | 自写服务端和客户端可能**错得一致**（例如两边都按 dict 读 content，就永远发现不了真 SDK 返回的是 dataclass） | 第二个对手用官方 SDK 写，两条发现路径共用同一份断言 | `tests/fixtures/mcp_sdk_server.py`（`FastMCP`，`protocolVersion 2024-11-05`）；`mcp` 只进 dev extra，运行时依赖预算（§2.4）不变 |
 
 ---
 
@@ -690,6 +744,9 @@ mini-claude-code/
 │   │   ├── checkpoints.py      影子 git（独立 --git-dir），两个后端共用同一份
 │   │   ├── factory.py          点名 → 探测 → **显式**降级，原因进 trace 与终端
 │   │   └── sessions.py         SessionSnapshot 落盘与读回（原子写、坏现场拒绝而不是猜）
+│   ├── ext/                    第三方能力（S14）
+│   │   ├── mcp.py              MCPBridge + RemoteTool：stdio 握手、`mcp__` 命名空间、风险不接受自报、env 白名单
+│   │   └── skills.py           SkillLoader（目录/正文分家）+ `load_skill`，frontmatter 手写解析不引 YAML
 │   ├── infra/
 │   │   ├── trace.py            JSONL 轨迹、replay、summarize、密钥脱敏
 │   │   └── failure.py          失败模式分类学（8 条规则，在线/离线共用）
@@ -709,8 +766,13 @@ mini-claude-code/
 │   ├── baselines/              `fake-<题集哈希>.json` —— B1 的基线，进版本库
 │   ├── results/                验收线的证据文件（b2/b3 的 A/B 判据、live 冒烟报表；数字不可复现所以入库）
 │   └── .work/                  工作副本与逐条记录（忽略，报表与基线才提交）
-├── scripts/                    probe_caps / probe_window / probe_parallel_share / b4_label_check / b2_compact_ab / b3_repomap_ab / b6_backend_ab 等证据生成器
-├── tests/                      595 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照）
+├── scripts/                    probe_caps / probe_window / probe_parallel_share / b4_label_check / b2_compact_ab / b3_repomap_ab / b6_backend_ab / s14_ext_demo 等证据生成器
+├── docs/
+│   └── framework-equivalence.md  LangGraph ↔ 本项目的概念对照 + 为什么不用它（D26，≤200 行）
+├── skills/                     技能目录（一个目录一个 SKILL.md，正文按需展开）
+│   ├── add-eval-task/          给 eval/ 加一道新题时怎么写判据
+│   └── trace-triage/           从 `mcc trace --why-failed` 的标签走到处方
+├── tests/                      680 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照；fixtures/ 里两个 MCP 服务：自写的敌意版 + 官方 SDK 版）
 └── demos/
     ├── run_demo.py             隔离副本 → 跑真 Agent → 独立判据 → 生成证据
     ├── fake_scripts.py         FakeLLM 轨迹（脚本化，不报自述数字）
@@ -730,7 +792,9 @@ mini-claude-code/
 > 修成可核对的口径（§6.4、§6.5）。**第 1 项的压缩那一半已在 S10 落地（§4.7，B2 的 fake 侧达成）；
 > 仓库地图那一半已在 S11 落地（§4.8：`memory/repo_map.py` + `.mcc/` 工作记忆），两半判据都跑完了，
 > 结果是 **B3 未达成**：机制层 7/7 绿，因果层轮数 0%（线 ≥20%）、token +5.4%（线 ≤15%）。
-> 第 2 项已在 S9 落地（§4.6，B1）。**
+> 第 2 项已在 S9 落地（§4.6，B1）。S13 落地了沙箱后端 / 检查点 / 崩了续跑（§4.10，B6 达成 12/12），
+> S14 落地了 MCP 桥与按需加载的技能（§4.11，20/20 前提），**S12 被自己的数据闸砍进了 Tier 3**
+> （§4.9）—— 下面这份列表保留原样，它记录的是"v1 收尾时以为下一步该做什么"，不是待办。
 
 1. **上下文压缩 + `memory/repo_map.py`**（解锁大仓库）。压缩必须保 `tool_calls`/`tool` 配对，且压缩前后跑同一批回归测试，否则就是把 400 换成静默变笨。
 2. **`eval/` 层：把 demo 判据变成可批量跑的评测**。`AgentResult` 的形状现在就定死了，V2 直接消费，不用回改核心循环。目标是从"4 个 demo 各跑一次"升级到"20 个任务 × 5 次，报通过率与方差"。

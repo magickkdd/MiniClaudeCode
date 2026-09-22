@@ -23,6 +23,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,7 @@ import pytest
 from fakes import FakeLLM, scripted_final_text, scripted_tool_calls
 from miniclaude.agent.context import ContextManager
 from miniclaude.agent.loop import Agent
-from miniclaude.agent.permissions import PermissionGate, PermissionMode
+from miniclaude.agent.permissions import Answer, PermissionGate, PermissionMode
 from miniclaude.agent.planner import TodoList
 from miniclaude.agent.state import AgentState, TerminationReason
 from miniclaude.agent.todo_tool import WriteTodosTool
@@ -45,6 +46,7 @@ import miniclaude
 
 SRC_ROOT = Path(miniclaude.__file__).parent
 SCHEMA_FILE = Path(__file__).parent / "schema_v2.json"
+FIXTURE_SERVER = Path(__file__).parent / "fixtures" / "mcp_fixture_server.py"
 
 # 每条记录都必须自带这些字段 —— 少一个就不是"同一份 trace"，离线工具会读崩。
 COMMON_ENVELOPE = frozenset({"seq", "ts", "session", "kind", "trace_id", "schema_version"})
@@ -426,6 +428,100 @@ def durable(tmp_path_factory: Any) -> list[dict[str, Any]]:
     return records
 
 
+EXT_SCRIPT = [
+    scripted_tool_calls([("load_skill", {"name": "contract-skill"})]),
+    scripted_tool_calls([("mcp__fx__echo", {"text": "外部工具跑一轮"})]),
+    scripted_final_text("技能取到了，外部工具也调过了。"),
+]
+
+
+@pytest.fixture(scope="module")
+def extended(tmp_path_factory: Any) -> list[dict[str, Any]]:
+    """`mcp` / `skills` 两条装配期事件的产地（SPEC v2 §3.7）。
+
+    仍然走 `build_session`：这两条记录是**装配层**写的，测试自己 log 一遍等于抄形状。
+    这里同时把 AUTO 那一臂跑到真调用 —— 远端工具在 AUTO 下也必须弹确认（D19），
+    只有真的调用成功一次，"命名空间前缀 → 注册 → 权限门 → 子进程"这条链路才算被证过。
+
+    第二臂是 READONLY：`mcp` 在那里走的是"配了但一个进程都不起"的另一条形状，
+    两种形状都得进快照，不然快照只钉住其中一种，另一条改了没人知道。
+    """
+    from miniclaude.cli.main import build_session
+    from miniclaude.cli.render import Renderer
+    from miniclaude.config import Config
+
+    root = tmp_path_factory.mktemp("ext")
+    (root / "notes.txt").write_text("第一行\n第二行\n", encoding="utf-8")
+    skill = root / "skills" / "contract-skill"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: contract-skill\ndescription: 契约测试用的技能\n---\n照正文做。\n" * 4,
+        encoding="utf-8",
+    )
+    servers = (
+        {
+            "name": "fx",
+            "endpoint": sys.executable,
+            "args": [str(FIXTURE_SERVER), "good"],
+        },
+    )
+
+    def assemble(mode: PermissionMode, responses: list[Any], trace: Path, confirmer: Any = None) -> Any:
+        return build_session(
+            config=Config(
+                base_url="https://mock.local/v1",
+                api_key="sk-test-abcdefghijklmn",
+                model="mock-model",
+                project_root=root,
+                trace_path=trace,
+                mcp_servers=servers,
+            ),
+            renderer=Renderer(write=lambda _text: None, use_rich=False),
+            llm=FakeLLM(responses),
+            mode=mode,
+            confirmer=confirmer,
+        )
+
+    records: list[dict[str, Any]] = []
+
+    granted = assemble(
+        PermissionMode.AUTO, EXT_SCRIPT, root / ".traces" / "ext-auto.jsonl",
+        confirmer=lambda _name, _summary: Answer.ONCE,
+    )
+    try:
+        granted.agent.run("取一个技能，再用外部工具回声一句话")
+    finally:
+        granted.close()
+    records += replay(root / ".traces" / "ext-auto.jsonl")
+
+    refused = assemble(
+        PermissionMode.READONLY,
+        [scripted_final_text("只读模式不跑工具")],
+        root / ".traces" / "ext-readonly.jsonl",
+    )
+    try:
+        refused.agent.run("只读着看一眼")
+    finally:
+        refused.close()
+    records += replay(root / ".traces" / "ext-readonly.jsonl")
+
+    events = [record for record in records if record.get("kind") == "mcp"]
+    assert len(events) == 2, f"`mcp` 应当有两条形状（装配 + 只读跳过），实到 {len(events)}"
+    assert events[0]["skip_reason"] == "" and events[0]["tools"] >= 3
+    assert events[1]["skip_reason"] and "running" not in events[1], "只读那一臂应当只有原因，不带运行计数"
+    skill_events = [record for record in records if record.get("kind") == "skills"]
+    assert skill_events and skill_events[0]["skills"] == 1
+    # D19 的端到端证据：AUTO 模式下远端工具确实经过了确认，也真的执行了
+    calls = [record for record in records if record.get("kind") == "tool_call" and record.get("name") == "mcp__fx__echo"]
+    assert len(calls) == 1 and calls[0]["ok"] is True
+    permissions = [
+        record for record in records
+        if record.get("kind") == "permission" and record.get("tool") == "mcp__fx__echo"
+    ]
+    assert permissions, "远端工具在 AUTO 模式下没留下确认记录 —— §6.3-1 就没人看守了"
+    return records
+
+
 # --------------------------------------------------------------- 不变式
 
 
@@ -518,7 +614,7 @@ def test_live_and_offline_classification_agree(session: Any) -> None:
 
 
 def test_trace_schema_snapshot(
-    session: Any, broken: Any, compacting: Any, refusing: Any, mapped: Any, durable: Any
+    session: Any, broken: Any, compacting: Any, refusing: Any, mapped: Any, durable: Any, extended: Any
 ) -> None:
     """每个 kind 的字段集合与快照逐字段比对。
 
@@ -526,12 +622,14 @@ def test_trace_schema_snapshot(
     重生成 `tests/schema_v2.json`，再同步 SPEC v2 §3.1 的事件表 —— 两处不一致就是
     "文档说的和代码做的不是一回事"，v1 的 `session_end` 事故（§0.3 E3）正是这么发生的。
 
-    六条会话各带一段形状：`session` 是正常流程，`broken` 只在那里出现的 `error`，
+    七条会话各带一段形状：`session` 是正常流程，`broken` 只在那里出现的 `error`，
     `compacting` 提供 `context_compact`，`refusing` 提供 `context_refuse`，
-    `mapped` 提供 `repo_map`，`durable` 提供 §3.6 的四条。少一条，快照上就少一个无人看守的 kind。
+    `mapped` 提供 `repo_map`，`durable` 提供 §3.6 的四条，`extended` 提供 §3.7 的两条。
+    少一条，快照上就少一个无人看守的 kind。
     """
     actual = _keys_by_kind(
-        list(session[0]) + list(broken) + list(compacting) + list(refusing) + list(mapped) + list(durable)
+        list(session[0]) + list(broken) + list(compacting) + list(refusing)
+        + list(mapped) + list(durable) + list(extended)
     )
     for kind, keys in sorted(actual.items()):
         assert keys >= COMMON_ENVELOPE, f"{kind} 缺了公共字段：{sorted(COMMON_ENVELOPE - keys)}"

@@ -62,6 +62,10 @@ class BaseTool(ABC):
     description: str = ""
     input_schema: dict[str, Any] = {}
     risk_level: RiskLevel = RiskLevel.READ
+    # True = 这个工具的动作发生在**工作区之外**（MCP 远端进程）。AUTO 模式的承诺是
+    # "工作区内自动放行"，外扩一步就越过了它自己的定义 —— 所以外部工具在 AUTO 下仍要确认。
+    # 见 SPEC v2 §3.7 D19 与 §6.3-1；判定住在 permissions.check()。
+    external: bool = False
 
     def __init__(self, workspace: Workspace) -> None:
         self.ws = workspace
