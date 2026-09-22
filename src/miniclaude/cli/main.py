@@ -27,6 +27,7 @@ from miniclaude.cli import trace_cmd
 from miniclaude.cli.render import Renderer
 from miniclaude.infra.trace import Tracer, of_session, prompt_hash, replay, summarize_records
 from miniclaude.llm.openai_compat import OpenAICompatClient
+from miniclaude.memory import MemoryStore, RepoMap
 from miniclaude.tools.registry import ToolRegistry
 from miniclaude.tools.workspace import Workspace
 
@@ -52,6 +53,8 @@ HELP = """命令：
   mcc eval --lint                   考题自检：这道题**可能**被做对吗
   mcc eval                          fake 引擎跑全批（不读 .env、不打网络、秒级）
   mcc eval --engine live --smoke    6 道 supports_live 题的真实模型冒烟
+  mcc eval --no-compact             上下文阶梯的对照臂（B2）
+  mcc eval --no-repo-map            符号地图的对照臂（B3，两臂只能差这一个开关）
   mcc eval --baseline <文件>        与基线对比，退步写进报表"""
 
 
@@ -98,14 +101,30 @@ def build_session(
         workspace, bash_timeout=cfg.bash_timeout, extra_tools=[WriteTodosTool(workspace, todos)]
     )
     gate = PermissionGate(workspace=workspace, mode=mode, confirmer=confirmer or make_confirmer())
-    system_prompt = build_system_prompt(
-        project_root=workspace.root,
-        platform=sys.platform,
-        model=cfg.model,
-        python_executable=sys.executable,
-        tool_names=registry.names(),
-        workspace=workspace,
+    # 地图只在装配时建一次，之后由 Agent 在每轮 `_system()` 里按需刷新（指纹没变就
+    # 返回同一个字符串，所以前缀缓存不会被打掉）。
+    # READONLY 下**不落盘**：只读模式承诺的是"这个工作区一个字节都不变"，而"缓存写了
+    # 但判据把它白名单掉"是在自己挖的坑上再盖一层布 —— A3 要成立得靠不写。
+    writable = mode is not PermissionMode.READONLY
+    store = MemoryStore.for_project(workspace.root) if cfg.repo_map and writable else None
+    repo_map = (
+        RepoMap(workspace, store=store, token_cap=cfg.repo_map_tokens) if cfg.repo_map else None
     )
+
+    def render_system() -> str:
+        """整段 system。抽成函数是为了让 Agent 能在写文件之后重画地图，
+        而不必把"仓库形状"这种会过期的东西硬编进一次性的字符串。"""
+        return build_system_prompt(
+            project_root=workspace.root,
+            platform=sys.platform,
+            model=cfg.model,
+            python_executable=sys.executable,
+            tool_names=registry.names(),
+            workspace=workspace,
+            map_provider=(repo_map.map_for_prompt if repo_map is not None else None),
+        )
+
+    system_prompt = render_system()
     tracer = Tracer(cfg.trace_path)
     # 提示词指纹进 trace：两次跑批之间提示词改没改，看这个字段而不是看 diff
     tracer.start_session(
@@ -114,6 +133,10 @@ def build_session(
         config=cfg.redacted(),
         system_prompt_hash=prompt_hash(system_prompt),
     )
+    if repo_map is not None:
+        # turn=0 = 会话装配时的那次渲染。不记这条的话，"地图第一次出现在哪"
+        # 在 trace 里就查不到，而 B3 要按它归因轮数差值。
+        tracer.log("repo_map", turn=0, **repo_map.stats.as_trace())
 
     render = renderer if renderer is not None else Renderer(verbose=verbose, use_rich=use_rich)
     client = llm if llm is not None else OpenAICompatClient(
@@ -140,6 +163,9 @@ def build_session(
         tracer=tracer,
         on_event=render.handle,
         price_per_mtokens=cfg.price_per_mtokens,
+        repo_map=repo_map,
+        system_provider=render_system,
+        notes=store.notes_for_prompt() if store is not None else "",
     )
     return Session(agent=agent, config=cfg, renderer=render, tracer=tracer, workspace=workspace)
 
@@ -198,11 +224,19 @@ def handle_command(session: Session, raw: str) -> str:
             if snap["compactions"]
             else "尚未触发压缩"
         )
+        stats = agent.repo_map.stats if agent.repo_map is not None else None
+        mapping = (
+            "仓库地图：关（system 里是 v1 的目录树）"
+            if stats is None
+            else f"仓库地图：{stats.modules_found} 个模块列出 {stats.listed}（未列 {stats.omitted}）"
+            f" · {stats.est_tokens:,}/{stats.token_cap:,} tokens · 已重画 {agent.repo_map.refreshes} 次"
+        )
         return (
             f"  消息 {len(agent.messages)} 条 · 估算 {used:,} / 预算 {agent.context.budget:,} tokens"
             f"（{used / budget * 100:.0f}%）· 硬熔断 {agent.context.hard_limit:,}\n"
             f"  系数 {snap['chars_per_token']} 字符/token · 端点上次实测 {snap['last_actual_prompt_tokens']:,} prompt tokens\n"
             f"  压缩阶梯 {'开' if snap['enabled'] else '关'} · {ladder}\n"
+            f"  {mapping} · 工作记忆笔记 {len(agent.notes):,} 字符\n"
             f"  累计 {agent.state.usage.total:,} / 上限 {agent.max_total_tokens:,} tokens · 轮数 {agent.state.turn}/{agent.max_turns}"
         )
     if name == "todos":
@@ -322,6 +356,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--readonly", action="store_true", help="等价 --mode readonly：只允许只读工具")
     parser.add_argument("--max-turns", type=int, default=None, help="单次任务最大轮数")
     parser.add_argument("--model", default=None, help="覆盖配置里的模型名")
+    parser.add_argument(
+        "--no-repo-map",
+        dest="repo_map",
+        action="store_false",
+        default=None,
+        help="不画符号地图，退回 v1 的目录树（B3 的对照组）",
+    )
+    parser.add_argument(
+        "--repo-map-tokens", type=int, default=None, help="地图的 token 预算（默认 REPO_MAP_TOKENS=1500）"
+    )
     parser.add_argument("--no-trace", action="store_true", help="不写会话日志")
     parser.add_argument("-v", "--verbose", action="store_true", help="打印轮次分隔线与工具输出摘要")
     return parser
@@ -377,6 +421,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         overrides["max_turns"] = args.max_turns
     if args.no_trace:
         overrides["trace_path"] = None
+    if args.repo_map is False:
+        overrides["repo_map"] = False
+    if args.repo_map_tokens is not None:
+        if args.repo_map_tokens < 1:
+            # `REPO_MAP_TOKENS=0` 在 §5.3 里曾被当作"关地图"的另一种写法。两种写法
+            # 关的是同一件事、报错却长得不一样，所以只留一个开关，另一个明确拒绝。
+            print("--repo-map-tokens 至少 1；要关地图请用 --no-repo-map", file=sys.stderr)
+            return 2
+        overrides["repo_map_tokens"] = args.repo_map_tokens
     if overrides:
         config = replace(config, **overrides)
 

@@ -36,6 +36,7 @@ from miniclaude.infra.failure import (
 from miniclaude.infra.trace import new_span_id, prompt_hash
 from miniclaude.llm.base import LLMClient
 from miniclaude.llm.openai_compat import LLMError
+from miniclaude.memory.repo_map import RepoMap
 from miniclaude.messages import Message, Role, StopReason, ToolResultBlock, dedupe_tool_use_ids
 from miniclaude.tools.base import ToolResult
 from miniclaude.tools.registry import ToolRegistry
@@ -45,6 +46,10 @@ EMPTY_REPLY_RETRIES = 2
 REJECTION_STOP = 2
 MAX_OUTPUT_CHARS = 30_000
 PREFIX_SAMPLE_CHARS = 2000
+# 地图的信号 ① 只认真正指向单个文件的调用。search_text / find_files 给的是目录或
+# glob 模式，把它们混进"最近读过的文件"会让一个宽搜索把整个仓库标成焦点 —— 那等于没有焦点。
+FOCUS_READ_TOOLS = frozenset({"read_file"})
+FOCUS_WRITE_TOOLS = frozenset({"write_file", "edit_file"})
 
 
 class EventKind(StrEnum):
@@ -89,6 +94,9 @@ class Agent:
         tracer: Any = None,
         price_per_mtokens: float = 0.0,
         summarizer_llm: LLMClient | None = None,
+        repo_map: RepoMap | None = None,
+        system_provider: Callable[[], str] | None = None,
+        notes: str = "",
     ) -> None:
         self.llm = llm
         # L2 摘要默认与主循环同一个客户端；eval 的 fake 引擎必须换成独立队列的假摘要器，
@@ -97,6 +105,14 @@ class Agent:
         self.registry = registry
         self.gate = gate
         self.base_prompt = system_prompt
+        # 地图是活的（仓库变了要重画），所以装配方可以给一个"重渲染整段 system"的回调。
+        # 没给就用固定的 system_prompt —— 手写提示词的调用方（测试、demo）不该被迫
+        # 认识 RepoMap。
+        self.system_provider = system_provider
+        self.repo_map = repo_map
+        # 工作记忆里的笔记在**会话开始时冻结**：本轮跑出来的笔记进不了本轮的提示词，
+        # 那是设计而不是缺陷 —— 历史里已经有 run_tests 的原始结果，再发一遍是纯开销。
+        self.notes = notes
         self.max_turns = max_turns
         self.max_total_tokens = max_total_tokens
         # 默认值只有一处来源（config.DEFAULTS）。这里再拍一个数就会有两套预算 ——
@@ -127,6 +143,9 @@ class Agent:
         self._est_tokens = []
         self._output_by_turn = {}
         self._last_call_key = None
+        if self.repo_map is not None:
+            # /reset 后焦点归零：新任务不该继续沿用上一个任务读文件带出来的排序偏好。
+            self.repo_map.forget_focus()
 
     def cancel(self) -> AgentResult:
         """用户在半途中断（Ctrl-C）时由 CLI 调用。
@@ -265,7 +284,18 @@ class Agent:
             self.state.turn += 1
             # 轮 span 先开：压缩事件属于这一轮，挂在上一轮的 span 下就查不到是谁压的。
             self._turn_span = new_span_id()
+            map_stamp = self.repo_map.refreshes if self.repo_map is not None else -1
             system = self._system()
+            if self.repo_map is not None and self.repo_map.refreshes != map_stamp:
+                # 只在地图**真的换了内容**时记一条。每轮都记就答不了"哪一轮开始模型看到的
+                # 仓库形状变了"，而 B3 的轮数差值恰恰要归因到这里。
+                self._trace(
+                    "repo_map",
+                    span_id=new_span_id(),
+                    parent_span_id=self._turn_span,
+                    turn=self.state.turn,
+                    **self.repo_map.stats.as_trace(),
+                )
             specs = self.registry.specs()
             sent_chars = self.context.wire_chars(system=system, tools=specs, messages=self.messages)
             est_tokens = self.context.estimate_from_chars(sent_chars)
@@ -521,6 +551,7 @@ class Agent:
                     verdict=verdict,
                     drops_assert=gaming,
                 )
+                self._observe_repo_map(call.name, args, ok)
 
             results.append(
                 ToolResultBlock(
@@ -536,16 +567,39 @@ class Agent:
 
         return results, (bool(results) and not executed_any)
 
+    def _observe_repo_map(self, name: str, args: dict[str, Any], ok: bool) -> None:
+        """把刚才那次文件操作喂给地图：读/改过的都进焦点，改过的还要作废重建（§3.4 信号 ①）。
+
+        只在工具**真的执行过**时调用 —— 被权限门拒掉的读写没碰到磁盘，算进焦点就是
+        拿一个没发生的动作去影响下一轮的排序。
+        """
+        if self.repo_map is None:
+            return
+        path = str(args.get("path") or args.get("file_path") or "").strip()
+        if not path:
+            return
+        if name in FOCUS_READ_TOOLS:
+            self.repo_map.observe_paths([path])
+        elif name in FOCUS_WRITE_TOOLS and ok:
+            self.repo_map.observe_paths([path])
+            self.repo_map.invalidate([path])
+
     # --------------------------------------------------------------- 内部
 
     def _system(self) -> str:
-        """把当前任务清单注入系统提示。
+        """本轮实际发出去的 system。
 
-        计划必须回到上下文里，否则模型下一轮就不记得自己承诺过什么步骤。
+        顺序是刻意的：稳定的装配产物在前（`system_provider` 会重渲染，但地图内部
+        按仓库指纹缓存，所以前缀不会抖），会变的东西在后（笔记、当前任务清单）。
+        提示词缓存吃的是最长公共前缀，把动的东西放后面能少付钱。
         """
-        if self.todos.is_empty:
-            return self.base_prompt
-        return f"{self.base_prompt}\n\n# 当前任务清单\n{self.todos.render()}"
+        base = self.system_provider() if self.system_provider is not None else self.base_prompt
+        parts = [base]
+        if self.notes:
+            parts.append(self.notes)
+        if not self.todos.is_empty:
+            parts.append(f"# 当前任务清单\n{self.todos.render()}")
+        return "\n\n".join(parts)
 
     def _finish(self, reason: TerminationReason) -> AgentResult:
         text = self._closing_text(reason)

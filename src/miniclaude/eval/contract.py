@@ -29,7 +29,9 @@ from typing import Sequence
 
 from miniclaude.agent.state import AgentResult
 
-NOISE = ("__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache")
+# 判定眼里的"不算仓库内容"。`.mcc` 是 agent 自己写的派生缓存（SPEC v2 §3.4）：
+# 把它算进树哈希，一次 AUTO 跑批就会自己把自己留下的缓存当成"改动了源码"。
+NOISE = ("__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", ".mcc")
 CHILD_ENV = {
     **os.environ,
     "PYTHONIOENCODING": "utf-8",

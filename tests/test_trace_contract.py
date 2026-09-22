@@ -37,6 +37,7 @@ from miniclaude.agent.todo_tool import WriteTodosTool
 from miniclaude.infra.failure import classify, facts_from_records
 from miniclaude.infra.trace import OUTPUT_CAP, Tracer, prompt_hash, replay, summarize_records
 from miniclaude.llm.openai_compat import LLMError
+from miniclaude.memory import RepoMap
 from miniclaude.tools.registry import ToolRegistry
 from miniclaude.tools.workspace import Workspace
 
@@ -175,6 +176,7 @@ def make_traced_agent(
     session_id: str,
     mode: PermissionMode = PermissionMode.ASK,
     budget: int = 200_000,
+    repo_map: RepoMap | None = None,
 ) -> tuple[Agent, Path]:
     """真工具 + 假模型 + 真落盘日志。schema 与指标都从这两次会话里取。
 
@@ -183,6 +185,9 @@ def make_traced_agent(
 
     `budget` 默认取实测窗口量级（200k），所以正常情况下阶梯不会介入，
     上面那些数字断言才是稳定的；只有 `compacting` 那个 fixture 会把它调小。
+
+    给了 `repo_map` 就走 `system_provider`（地图是 system 的一部分，不是单独一段
+    消息）—— 不接这条线的会话永远产不出 `repo_map` 事件。
     """
     (root / "notes.txt").write_text("第一行\n第二行\n", encoding="utf-8")
     workspace = Workspace(root)
@@ -190,6 +195,10 @@ def make_traced_agent(
     registry = ToolRegistry.default(
         workspace, bash_timeout=30, extra_tools=[WriteTodosTool(workspace, todos)]
     )
+
+    def system_provider() -> str:
+        return f"{PROMPT}\n\n{repo_map.map_for_prompt()}" if repo_map is not None else PROMPT
+
     trace_path = root / f"{session_id}.jsonl"
     tracer = Tracer(trace_path, session_id=session_id)
     tracer.start_session(
@@ -207,6 +216,8 @@ def make_traced_agent(
         todos=todos,
         tracer=tracer,
         price_per_mtokens=2.5,
+        repo_map=repo_map,
+        system_provider=system_provider if repo_map is not None else None,
     )
     return agent, trace_path
 
@@ -310,6 +321,40 @@ def refusing(tmp_path_factory: Any) -> list[dict[str, Any]]:
     return records
 
 
+MAP_SCRIPT = [
+    scripted_tool_calls([("read_file", {"path": "pkg.py"})]),
+    scripted_tool_calls([("write_file", {"path": "pkg.py", "content": '"""包。"""\n\nSIZE = 2\n'})]),
+    scripted_final_text("读过了，也改了。"),
+]
+
+
+@pytest.fixture(scope="module")
+def mapped(tmp_path_factory: Any) -> list[dict[str, Any]]:
+    """`repo_map` 的字段形状由真事件钉住（SPEC v2 §3.4）。
+
+    先读后写：读那一轮证明**焦点变化不重画地图**，写那一轮证明 `invalidate()` 之后
+    真的重画 —— 于是恰好两条事件（首建 + 写后重画）。条数从 2 变多就是地图开始每轮
+    抖动了，那会直接打掉提示词前缀缓存，所以这里当契约钉住，不留给行为测试。
+    """
+    root = tmp_path_factory.mktemp("repo-map")
+    (root / "pkg.py").write_text('"""包。"""\n\nVERSION = 1\n', encoding="utf-8")
+    agent, trace_path = make_traced_agent(
+        root,
+        MAP_SCRIPT,
+        session_id="repo-map",
+        mode=PermissionMode.AUTO,
+        repo_map=RepoMap(Workspace(root)),
+    )
+    agent.run("读 pkg.py，然后把常量改掉")
+    records = replay(trace_path)
+    events = [record for record in records if record.get("kind") == "repo_map"]
+    assert len(events) == 2, (
+        f"`repo_map` 应当恰好两条（首建 + 写文件后重画），实到 {len(events)} —— "
+        "多了说明地图每轮重画（前缀缓存被打掉），少了说明这个 kind 正在悄悄失去覆盖"
+    )
+    return records
+
+
 # --------------------------------------------------------------- 不变式
 
 
@@ -401,18 +446,22 @@ def test_live_and_offline_classification_agree(session: Any) -> None:
     assert [found.mode.value for found in classify(facts_from_records(session[0]))] == report["failure_modes"]
 
 
-def test_trace_schema_snapshot(session: Any, broken: Any, compacting: Any, refusing: Any) -> None:
+def test_trace_schema_snapshot(
+    session: Any, broken: Any, compacting: Any, refusing: Any, mapped: Any
+) -> None:
     """每个 kind 的字段集合与快照逐字段比对。
 
     加字段/改名/删字段时：先跑 `MCC_REGEN_SCHEMA=1 pytest tests/test_trace_contract.py`
     重生成 `tests/schema_v2.json`，再同步 SPEC v2 §3.1 的事件表 —— 两处不一致就是
     "文档说的和代码做的不是一回事"，v1 的 `session_end` 事故（§0.3 E3）正是这么发生的。
 
-    四条会话各带一段形状：`session` 是正常流程，`broken` 只在那里出现的 `error`，
-    `compacting` 提供 `context_compact`，`refusing` 提供 `context_refuse`。
-    少一条，快照上就少一个无人看守的 kind。
+    五条会话各带一段形状：`session` 是正常流程，`broken` 只在那里出现的 `error`，
+    `compacting` 提供 `context_compact`，`refusing` 提供 `context_refuse`，
+    `mapped` 提供 `repo_map`。少一条，快照上就少一个无人看守的 kind。
     """
-    actual = _keys_by_kind(list(session[0]) + list(broken) + list(compacting) + list(refusing))
+    actual = _keys_by_kind(
+        list(session[0]) + list(broken) + list(compacting) + list(refusing) + list(mapped)
+    )
     for kind, keys in sorted(actual.items()):
         assert keys >= COMMON_ENVELOPE, f"{kind} 缺了公共字段：{sorted(COMMON_ENVELOPE - keys)}"
     if os.environ.get("MCC_REGEN_SCHEMA") == "1":

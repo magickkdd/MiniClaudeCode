@@ -56,6 +56,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="覆盖 CONTEXT_HARD_LIMIT（端点拒收前的止损线）：对照臂要靠它把'不压缩就撞墙'跑出来",
     )
+    # 地图 A/B 用（B3）：两臂只能差"画不画符号地图"这一件事。
+    parser.add_argument(
+        "--no-repo-map",
+        dest="repo_map",
+        action="store_false",
+        default=None,
+        help="不画 ast 符号地图，退回 v1 的目录树（B3 的对照组）",
+    )
+    parser.add_argument(
+        "--repo-map-tokens",
+        type=int,
+        default=None,
+        help="覆盖 REPO_MAP_TOKENS（地图的 token 预算）；它计入 context_peak，B3 的第二条判据就靠这个口径",
+    )
     parser.add_argument("--lint", action="store_true", help="只做考题自检（判据可能为真的题）后退出")
     parser.add_argument("--list", dest="as_list", action="store_true", help="列出任务后退出")
     parser.add_argument(
@@ -120,11 +134,17 @@ def run(argv: Sequence[str], config: Config | None = None) -> int:
             )
             return 2
 
-    tuned = bool(args.no_compact or args.context_budget or args.context_hard_limit)
+    tuned = bool(
+        args.no_compact
+        or args.context_budget
+        or args.context_hard_limit
+        or args.repo_map is False
+        or args.repo_map_tokens is not None
+    )
     if tuned and args.save_baseline and not args.force:
         print(
-            "已拒绝：--no-compact / --context-budget / --context-hard-limit 改过阶梯，"
-            "这批不能当基线入库（确实要就加 --force）",
+            "已拒绝：--no-compact / --context-budget / --context-hard-limit / --no-repo-map /"
+            " --repo-map-tokens 改过阶梯或地图，这批不能当基线入库（确实要就加 --force）",
             file=sys.stderr,
         )
         return 2
@@ -143,6 +163,8 @@ def run(argv: Sequence[str], config: Config | None = None) -> int:
         context_compact=False if args.no_compact else None,
         context_budget=args.context_budget,
         context_hard_limit=args.context_hard_limit,
+        repo_map=False if args.repo_map is False else None,
+        repo_map_tokens=args.repo_map_tokens,
     )
     scope = (
         f"{len(selected)} 题 × {repeats} 次"
@@ -163,6 +185,14 @@ def run(argv: Sequence[str], config: Config | None = None) -> int:
         if args.context_hard_limit:
             ladder += f" · 熔断线 {args.context_hard_limit:,} tokens"
         print(f"上下文阶梯：{ladder} —— 这批的分数不与默认配置批混读")
+    if args.repo_map is False or args.repo_map_tokens is not None:
+        # B3 的两臂同理：终端第一行就要看清这批有没有地图，别去翻 manifest。
+        print(
+            "仓库地图："
+            + ("关（system 里是 v1 目录树）" if args.repo_map is False else "开")
+            + (f" · 预算 {args.repo_map_tokens:,} tokens" if args.repo_map_tokens is not None else "")
+            + " —— 这批的分数不与默认配置批混读"
+        )
     if baseline_path is not None:
         print(f"基线：{baseline_path}")
     report = runner.run()

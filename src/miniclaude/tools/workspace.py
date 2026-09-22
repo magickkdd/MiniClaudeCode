@@ -28,6 +28,10 @@ IGNORED_DIRS: frozenset[str] = frozenset(
         ".idea",
         ".vscode",
         ".traces",
+        # agent 自己的记忆缓存（SPEC v2 §3.4）。不忽略它就会出现一条真实的自我强化
+        # 回路：地图读到 .mcc/ 里缓存的地图，下一次地图再基于它生成，几轮之后
+        # 模型看到的是自己的输出被当成代码。
+        ".mcc",
     }
 )
 

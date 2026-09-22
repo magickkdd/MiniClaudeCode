@@ -18,6 +18,8 @@ DEFAULTS: dict[str, int] = {
     "TOKEN_BUDGET": 32_000,          # 成本与注意力质量预算：压缩阶梯挂它
     "CONTEXT_HARD_LIMIT": 200_000,   # 只防一件事：请求被端点拒收
     "CONTEXT_COMPACT": 1,            # 0 = 关掉阶梯（B2 要"压缩关闭时失败"这一半对照）
+    "REPO_MAP": 1,                   # 0 = 退回 30 行目录树（B3 的对照臂）
+    "REPO_MAP_TOKENS": 1_500,        # 地图自己的 token 预算，计入 system 与估算
     "MAX_TOTAL_TOKENS": 800_000,
     "LLM_REQUEST_TIMEOUT": 120,
 }
@@ -49,6 +51,8 @@ class Config:
     token_budget: int = DEFAULTS["TOKEN_BUDGET"]
     context_hard_limit: int = DEFAULTS["CONTEXT_HARD_LIMIT"]
     context_compact: bool = bool(DEFAULTS["CONTEXT_COMPACT"])
+    repo_map: bool = bool(DEFAULTS["REPO_MAP"])
+    repo_map_tokens: int = DEFAULTS["REPO_MAP_TOKENS"]
     max_total_tokens: int = DEFAULTS["MAX_TOTAL_TOKENS"]
     request_timeout: int = DEFAULTS["LLM_REQUEST_TIMEOUT"]
     price_per_mtokens: float = 0.0
@@ -78,6 +82,13 @@ class Config:
                 f"TOKEN_BUDGET({budget}) 必须小于 CONTEXT_HARD_LIMIT({hard_limit})："
                 "前者是压缩阶梯挂的预算，后者是防拒收的熔断，调反了等于关掉压缩。"
             )
+        map_tokens = _int("REPO_MAP_TOKENS")
+        if map_tokens < 1:
+            # SPEC §5.3 原写"`REPO_MAP_TOKENS=0` 即关闭"。as-built 改成两个字段各司其职：
+            # 预算字段只管大小，开关是 REPO_MAP=0。留 0 这条路会得到一张只有页脚的地图。
+            raise ConfigError(
+                f"REPO_MAP_TOKENS({map_tokens}) 至少 1：要关地图请用 REPO_MAP=0（B3 的对照臂走的就是它）。"
+            )
 
         return cls(
             base_url=base_url,
@@ -91,6 +102,8 @@ class Config:
             token_budget=budget,
             context_hard_limit=hard_limit,
             context_compact=bool(_int("CONTEXT_COMPACT")),
+            repo_map=bool(_int("REPO_MAP")),
+            repo_map_tokens=_int("REPO_MAP_TOKENS"),
             max_total_tokens=_int("MAX_TOTAL_TOKENS"),
             request_timeout=_int("LLM_REQUEST_TIMEOUT"),
             price_per_mtokens=_float("PRICE_PER_MTOKENS"),
@@ -110,6 +123,8 @@ class Config:
             "token_budget": self.token_budget,
             "context_hard_limit": self.context_hard_limit,
             "context_compact": self.context_compact,
+            "repo_map": self.repo_map,
+            "repo_map_tokens": self.repo_map_tokens,
             "price_per_mtokens": self.price_per_mtokens,
             "trace_path": str(self.trace_path) if self.trace_path else None,
         }

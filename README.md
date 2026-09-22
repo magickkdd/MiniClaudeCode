@@ -23,7 +23,7 @@
 
 注意最后那句自我更正：**优先级 bug 是测试抓出来的，不是模型看出来的**。这就是 `run_tests` 作为判据而不是装饰的意义。
 
-当前状态：**446 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2 的 fake 侧**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，12 条判据与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)，真实端点那 5 次尚未跑，所以这一条验收线只算完成一半。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
+当前状态：**477 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2 的 fake 侧**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，12 条判据与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)，真实端点那 5 次尚未跑，所以这一条验收线只算完成一半；S11 交付了仓库符号地图与 `.mcc/` 工作记忆（见 §4.8）：两臂只差 `--no-repo-map` 一个开关，7 条机制判据（地图**换掉**目录树、地图计入 `context_peak`、零额外 LLM 调用、两臂 system 不同）离线全绿；真实模型那半条跑完了，结论是 **B3 未达成** —— token 侧 ✓（`context_peak` p95 涨幅 +5.4%，线是 ≤15%），轮数侧 ✗（`steps_to_success` 中位 6.0 → 6.0，降幅 0%，线是 ≥20%），通过数还从 14/18 掉到 13/18。这是一次有效的证伪而不是无效实验（脚本先证明了配对成立），20% 这条线保持原样，重测计划记在 SPEC §7.3-5，全部数字见 [`eval/results/b3-repomap-ab.json`](eval/results/b3-repomap-ab.json)。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
 
 ---
 
@@ -43,6 +43,8 @@
 ### 1.2 明确不做（V1/V2 的事）
 
 多 Agent、VLM、RL、GUI、大规模 RAG、自动上下文压缩、跨会话记忆。SPEC §3.5 的结论是 MVP 阶段**只观测上下文，不干预**：压缩会破坏 `assistant.tool_calls` 与 `role=tool` 的配对，端点直接 400，排查成本远高于一次明确的"任务太大，请缩小范围"。
+
+> 这份"不做"清单里有两条在 v2.0 被推翻了：自动上下文压缩 = S10（§4.7，先把配对不变式 `assert_pairing` 做出来再压），仓库地图与 `.mcc/` 工作记忆 = S11（§4.8）。**跨会话的"经验教训"仍然不做** —— SPEC v2 §6.3-2 的理由成立：一次错误观察会持续误导后续会话，而它没有判据能把自己纠正回来。
 
 ---
 
@@ -81,7 +83,7 @@
 
 三条硬约束（违反就会让测试和 demo 失去意义）：
 
-1. **单向依赖**：`cli → agent → (tools | llm) → messages/config`。`tools/` 永远不 import `agent/` —— 所以 `write_todos` 这个工具住在 `agent/todo_tool.py`，通过 `ToolRegistry.default(extra_tools=[...])` 注入，而不是塞进 `tools/`。
+1. **单向依赖**：`cli → agent → (tools | llm | memory) → messages/config`。`tools/` 永远不 import `agent/` —— 所以 `write_todos` 这个工具住在 `agent/todo_tool.py`，通过 `ToolRegistry.default(extra_tools=[...])` 注入，而不是塞进 `tools/`。S11 的 `memory/` 同一条规矩：它只 import `tools/workspace.py` 拿路径锁，不认识 `agent/`，地图由 `agent/loop.py` 反过来喂焦点。
 2. **一个装配点**：`build_session()` 同时服务 REPL、`--task` 一次性模式和 `demos/run_demo.py`。否则"demo 跑通的东西"和"用户手上跑的东西"就不是同一个东西。
 3. **CLI 层零业务逻辑**：本文件里没有 `while` 循环控制 Agent，交互归 CLI，控制归 `agent/loop.py`。
 
@@ -206,6 +208,8 @@ Ctrl-C 的语义是**放弃当前输入但保留历史**：中断不该毁掉已
 | `TOKEN_BUDGET` | 32000 | 上下文估算预算 —— **压缩阶梯挂这个**（v1 的 120000 已下调，理由见 §4.7） |
 | `CONTEXT_HARD_LIMIT` | 200000 | 只防一件事：请求被端点拒收。独立熔断 `est ≥ 0.9 ×` 它，与 `TOKEN_BUDGET` 必须严格更大的小于关系由 `config.py` 加载时校验 |
 | `CONTEXT_COMPACT` | 1 | 设 `0` 整个压缩阶梯不开（L3 拒载与硬熔断照旧）。评测里对应 `--no-compact` |
+| `REPO_MAP` | 1 | 设 `0` 不画符号地图，system 退回 v1 的 30 行目录树。**关地图只有这一个开关**，评测里对应 `--no-repo-map`（B3 的对照组） |
+| `REPO_MAP_TOKENS` | 1500 | 地图的 token 预算（纯预算，至少 1；`<1` 在 config/CLI/runner 三处各自拒绝）。它**计入** `context_peak`，所以 B3 的第二条判据量的是含地图的口径 |
 | `LLM_REQUEST_TIMEOUT` | 120 | HTTP 超时 |
 | `TRACE_PATH` | 空 | 会话 JSONL 落盘位置 |
 
@@ -265,6 +269,40 @@ PYTHONPATH="src;demos" python -X utf8 scripts/b2_compact_ab.py # 三臂 + 12 条
 
 实测（`lc-rollup-api`：`ledger/` 八模块 194,356 字符，逐字抄签名再写汇总层）：关阶梯第 5 轮 `est=31,287` 越 `l3_refuse`（阈值 30,400）判 `context_overflow`；开阶梯 19 轮全绿、14 次压缩、0 次因配对放弃、0 个配对 400。这条死因不是靠人转述的 —— `context_refuse` 记录自带 `line / threshold_tokens / est_tokens / ladder_enabled`，因为 `turn_start` 每轮只在请求前采样一次，光看 est 序列会把"预算杀掉的会话"读成"模型自己停了"。
 
+### 4.8 仓库符号地图与工作记忆（`memory/`，接手陌生仓库）
+
+v1 给模型的是那张 30 行广度优先目录树 —— 它说"有哪些目录"，不说"这个仓库里有什么可以用"。S11 换成 **ast 符号地图**（`memory/repo_map.py`）：每个 `.py` 一行文档 + 模块级函数/类/方法签名 + 常量，按 `REPO_MAP_TOKENS` 预算裁剪，超出部分明确写出"未列出的是哪几个"。零新依赖（不引 tree-sitter），因为本项目只对 Python 负责。
+
+三条设计决定值得单独说：
+
+- **排序不做 PageRank，用三个能解释的廉价信号**：① 与最近读/改的目标同目录或直接命中；② 文件名出现在当前 TodoList 文本里；③ 被仓库内 `import` 的次数。每个条目自带它入选的原因，`mcc trace` 里的 `repo_map` 事件带 `reasons` —— 否则"地图为什么给了这个、没给那个"只能靠猜。
+- **地图只在指纹变化时重画**（`mtime+size`），一次读文件不会让 system 变样。这条不是性能优化，是**稳定性要求**：system 每轮都在发，抖动一次就等于给模型换了份上下文。`test_a_read_never_re_renders_the_map_mid_session` 拿"读一轮之后两次请求的 system 字符串逐字相同"把它钉住。
+- **`.mcc/` 是派生物，不是第二个事实来源**。缓存坏了、版本不认识、被删 —— 一律降级成"没有缓存"重建（`MemoryStore.degraded` 报原因），绝不报错停机；`TEST_COMMAND` 类笔记只展示、不自动执行，记忆内容没有任何一条路径能走到 `eval`/`exec`/`subprocess`（`test_a_test_command_note_says_it_is_display_only` 用 AST 扫这一层的 import 与调用做静态检查）。
+
+一个踩过的坑值得写下来：**只读模式必须一个字节都不写**。READONLY 问答跑完，`.mcc/memory.json` 出现在工作副本里，A3（"只读承诺"）当场被自己的缓存打破。修法是只读臂**根本不建 store**（`cli/main.py`），而不是"写了再让判据白名单掉"——后者是在自己挖的坑上再盖一层布。同时 `.mcc` 进判据侧的 `NOISE`，AUTO 批跑留下的缓存不会被算成"改了源码"。
+
+```bash
+mcc eval --repeats 3                       # 实验组：system 里是符号地图
+mcc eval --repeats 3 --no-repo-map         # 对照组：system 里是 v1 目录树
+PYTHONPATH="src;demos" python -X utf8 scripts/b3_repomap_ab.py          # 只核机制，不花额度
+PYTHONPATH="src;demos" python -X utf8 scripts/b3_repomap_ab.py --live   # B3 的因果半条（6 题 × 3 次 × 2 臂）
+```
+
+B3 的两句判据写在 `eval/results/b3-repomap-ab.json` 里，两臂只差 `--no-repo-map` 一个开关（脚本会先证明这件事：同题集、同重复数、每题 system 哈希跨臂不同、`llm_request` 次数两臂相等）。
+
+**实到结果：机制层 7 条全绿，因果层判"地图没用"。** 6 道 A1 题 × 3 次 × 2 臂 = 36 次真模型运行、1,260,511 tokens：
+
+| | 线 | 实到 |
+|---|---|---|
+| `context_peak` p95 涨幅 | ≤ 15% | **+5.4%**（7,711 → 8,129，地图自己的 token 计进了分母） |
+| `steps_to_success` 中位降幅 | ≥ 20% | **0%**（6.0 → 6.0） |
+| 额外 LLM 调用 | 0 | 两臂各 33 / 33 |
+| 通过数（防幸存者偏差） | on ≥ off | **13/18 vs 14/18** ✗ |
+
+逐题看更诚实：3 题变快（`rt-checkout-bulk` 5→4、`session-fix-humanize-only` 6→4、`slug-dedup-clean-rule` 7→6.5）、2 题变慢（`session-fix-ttl-units` 7.5→8.0、`taxed-fix-eu-vat` 6→8）、1 题（`bh-format-duration`）两臂 3 次全灭所以对中位数贡献为 0 —— 那份中位数实际是 5 题的。结论写成一句话：**地图很便宜，但它在 A1 这种"搜一个符号名 → 读两个文件"的形状上不是那条杠杆**；这类题的定位路径目录树已经给够了。20% 这条线保持原样，不改成能过的数，重测计划记在 SPEC §7.3-5（要换考卷：跨 ≥5 文件的改动题）。机制本身保留 —— 它几乎免费，且是 §3.4 三条排序信号的落地处。
+
+时间开销的账在同一个证据文件的 `budget_lines` 里（不进 B3 判定，SPEC §4 没写它们）：每轮附加开销 **0.0003ms** ✓；进程内 memo 重画 4.0~9.4ms；跨进程命中磁盘缓存 27.9~99.4ms ✗（≤5ms 那条要 `stat` 142 个文件的指纹，压到 5ms 只能不信指纹，而那是 §2.3-1 禁止的）；冷建 142 文件 557~1,381ms、总中位 **829ms** ✗ 一条 800ms 的线 —— 而且这条线配"<2000 文件"隐含 0.4ms/文件，实测 4~7ms/文件，**规格自己的两个数差一个数量级**。详见 SPEC §6.2.1。
+
 
 ---
 
@@ -294,7 +332,7 @@ PYTHONPATH="src;demos" python -X utf8 scripts/b2_compact_ab.py # 三臂 + 12 条
 ```
 用户任务
    │
-   ├─ 上下文组装  system = 身份/规范 + 运行环境事实 + 仓库地图(≤30 行)
+   ├─ 上下文组装  system = 身份/规范 + 运行环境事实 + 仓库符号地图(REPO_MAP_TOKENS 预算，关时退回 30 行目录树)
    │                        + 工具清单 + 计划规范 + 自我调试规范 + 当前 TodoList
    │              messages = 历史（含上一轮全部工具结果）
    │              tools    = registry.specs()
@@ -478,11 +516,12 @@ live 那次（`demos/traces/red-tests.live.jsonl`，6 轮 13 次调用）的路�
 ## 8. 测试
 
 ```bash
-python -m pytest -q                # 446 passed
+python -m pytest -q                # 477 passed
 python -m pytest tests/test_loop_with_fake_llm.py -q
 python -m pytest tests/test_eval_runner.py tests/test_eval_cli.py -q   # 评测层（不联网）
 python scripts/b4_label_check.py   # 失败模式标签的人工核对，退出码 0 才算过
 python scripts/b2_compact_ab.py    # B2 三臂 A/B + 12 条判据，退出码 0 才算过（--live 才花额度）
+python scripts/b3_repomap_ab.py    # B3 两臂 A/B：机制判据离线核，因果两条判据要 --live
 mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 ```
 
@@ -491,6 +530,7 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | `test_loop_with_fake_llm.py`（30） | 全量回填与顺序、多轮工具链、轮数/token 止损、上下文超预算、**止损记录自带归因（`context_refuse` 的 `line`/`ladder_enabled`）**、**摘要请求不吃主剧本队列**、**空摘要照样记账**、停滞与空响应重试、未知工具、参数畸形的 tool_call、路径逃逸、只读拦截、连续拒绝、自我调试直到转绿、事件与轨迹 |
 | `test_compact.py`（25） | 三级阶梯各自触发/不触发：L1 只动工具输出且消息数不变、压到目标线才收手、保护最近 N 轮、L2 整组删、`summary_files` 只报**真存活**的路径、配对破损时放弃并留中文说明、`run_ladder` 一层放弃后不再往上付钱 |
 | `test_pairing.py`（26） | 三条配对规则逐个方向钉死：并行一轮多调用、结果消息不许混文本、**跨轮撞 id**（`dedupe_tool_use_ids` 的确定性改名与"干净历史不许改对象"）、压缩/resume/子 agent 回填三条路径共用同一份判定 |
+| `test_memory.py`（31） | 工作记忆与符号地图：`.mcc/memory.json` 跨实例往返、**坏文件退化成没缓存而不是崩**、未知版本宁丢不猜、笔记按字符封顶、`TEST_COMMAND` 类笔记只展示不执行、地图侧的三条排序信号互不干扰、指纹过期只重建那一个文件、**没有模块级符号的脚本也要占一行**、同一仓库两个实例渲出同一份地图、system 里地图**换掉**目录树而不是叠加、笔记与清单排在地图之后、**一次读不会中途重画地图（字节相同）**、成功的写要喂焦点而被拒的写不喂、`reset()` 清掉上一个任务的焦点、`repo_map` 事件进 trace |
 | `test_tools.py`（43） | 每个工具的正常路径与失败形态：越界路径、目录当文件读、非法正则、无匹配、`old_string` 不唯一/不匹配、bash 超时、**非零退出算观测不算工具报错**、参数校验、多余参数丢弃、注册表去重 |
 | `test_failure_rules.py`（44） | 8 条失败模式规则各自的命中与**不命中**：真实形状逐条钉住（含"context_growth 在旧 schema 上彻底失明"这条已知盲区），并检查 `scripts/b4_label_check.py` 的 EXPECT 覆盖到盘上每一条 trace |
 | `test_cli.py`（29） | `build_session` 装配、密钥不进 trace 与提示词、REPL 分发与 EOF/Ctrl-C、渲染逐行语义（一行一次调用、标签取识别参数、被拒才打印）、一次性任务的退出码映射、确认器答复翻译 |
@@ -505,7 +545,7 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | `test_permissions.py`（17） | 三种模式 × 三种风险、路径锁在所有模式下生效、破坏性命令在 AUTO 下仍拒、写 `.env` 需显式放行、会话级授权不能吞掉密钥警告、无确认渠道时失败关闭 |
 | `test_planner.py`（13） | 清单不变量、回填、状态机 |
 | `test_trace_cli.py`（12） | `mcc trace` 渲染：时间线/热点/`--why-failed`、schema 不匹配时点名缺哪些字段、旧 trace 落盘标签与当前规则不一致时打印"规则口径变过" |
-| `test_prompts.py`（12） | 环境事实是否被注入（Windows/POSIX 各钉一批关键词）、工具清单回灌、仓库地图行数上限 |
+| `test_prompts.py`（12） | 环境事实是否被注入（Windows/POSIX/macOS 各钉一批关键词）、工具清单回灌且无名字时仍禁止编造、提示词跨调用字节稳定、`REPO_MAP=0` 时那棵退回的目录树：只画形状不画噪声、广度优先、行数预算花完要留截断提示、空工作区 |
 | `test_trace.py`（10） | 落盘与脱敏、replay 容忍非对象 JSON、summarize 只读已记录的字段 |
 | `test_context.py`（10） | 估算与实测校准、压力分档 |
 | `test_trace_contract.py`（11） | **度量契约**：每个报表键都有生产者、发起数≠执行数、在线与离线分类共用同一份定义、schema 快照、`output_chars` 只能从 `tool_call` 记录加出来（含"省略量为 0 是真算了 0"这条）、"孤儿键"检测器自己能抓到 planted 样例 |
@@ -521,9 +561,9 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 
 ## 9. 已知局限（诚实清单）
 
-- **A1 要求"非本项目真实仓库"，这里用的是仓库内 vendored fixture。** 拉取外部开源仓库的网络操作被本机权限策略拦下，于是改成手写陌生仓库。它证明了"基线全绿 + 一句话描述 + 无 traceback 定位"，但没证明跨语言、跨规模（真实 OSS 仓库的 5000 文件规模只会压垮仓库地图和上下文预算，那时得靠 V1 的 `memory/repo_map.py`）。
+- **A1 要求"非本项目真实仓库"，这里用的是仓库内 vendored fixture。** 拉取外部开源仓库的网络操作被本机权限策略拦下，于是改成手写陌生仓库。它证明了"基线全绿 + 一句话描述 + 无 traceback 定位"，但没证明跨语言、跨规模。真实 OSS 仓库的 5000 文件规模只会压垮仓库地图和上下文预算 —— 本仓库 142 个可见 `.py`（约为那个规模的 3%）冷建地图就要 0.83 秒，负载下最高 1.38 秒。
 - **压缩只到 L2，且它的收益只在 fake 引擎上量化过。** L1 省略工具输出、L2 结构化摘要都已上线并跑通 B2 的 A/B（§4.7），但"压缩后 agent 有没有静默变笨"这件事的真实分布要靠 live 臂：`scripts/b2_compact_ab.py --live`（真实端点各 5 次、成功率 ≥60%）**尚未执行**，所以 B2 只算完成一半。另外 `write_file` 的 content 进的是 assistant 消息，L1 碰不到它 —— 写得很长的会话只能靠 L2 那次付费调用救。
-- **仓库地图固定 30 行、广度优先。** 深目录树的尾部看不到，模型得自己 `find_files`。
+- **符号地图只认 Python、只认 `ast` 能看出来的东西。** 装饰器背后的动态注册、`__all__` 之外的字符串路由、yaml/toml 里的符号都看不见；`REPO_MAP=0` 时退回的仍是那棵固定 30 行、广度优先的目录树，深目录尾部一样要靠模型自己 `find_files`。跨进程缓存命中实测 27.9~99.4ms（最后一次 36.8ms），没达到 SPEC §6.2 的 ≤5ms 那条线 —— 同实例的进程内 memo 是 4.0~9.4ms，那条达标（原因与口径见 `eval/results/b3-repomap-ab.json` 的 `amendments`）。
 - **live 数字不可复现。** 同一任务重跑轮数会漂移；证据文件因此各自记录自己那一次，不做"平均"。
 - **端点行为依赖。** `tools` 字段偶发被吞，所以工具清单在系统提示里又列了一遍。
 - **`rich` 是可选依赖**，缺失时渲染层自动退化成纯文本，功能不变。
@@ -548,11 +588,13 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | 6 | 嵌套 pytest 静默收集 0 用例却报"退出码 0" | 判定脚本在 fixture 副本里跑 pytest 时继承了 `testpaths` 与仓库根 `conftest.py` 的 `collect_ignore_glob`，等于把"考卷"忽略了 | demo 判据必须显式隔离配置并校验收集数 | `--confcutdir .` + 显式目标 + "0 收集 ⇒ 退出码 5" |
 | 7 | Demo 2 判据"tests/ 逐字节不变"与任务"补回归测试"矛盾 | 任务同时要求补测试和不许删断言，字节级不变太严 | §1.3 明确 A1 的 tests/ 判据是"基线内容保留"（只增不删） | 新增 `subset_only_added`，Demo 3 仍用逐字节 |
 | 8 | 终端摘要与证据表格数字不一致 | 被权限门拦下的调用会进 `state.tool_calls`，但不产生 trace 的 `tool_call` 记录 | 所有对外数字统一从 trace 派生 | 命令行摘要改用同一份 stats，并单列"被拦"数；v2 的 S8 把这件事做成命名：发起数 `run_end.tool_calls` 与执行数 `tool_executed`（由 `tool_call` 条数得出）两个量各归各位，`test_trace_contract.py` 钉住"两个数不是一回事" |
-| 9 | S9 计划里的 `--compare <file>` / `--tag <name>` 与 `mcc eval-ab` / `mcc sbs` 落不了地 | 基线的身份就是"这张考卷的成绩"，再起一个 tag 名只会引入"拿错基线"这条错误路径；`eval-ab` 需要的配置注入面（`REPO_MAP=off/on`）在 S11 才存在 | SPEC v2 §3.2 增补 as-built 表 | 改成 `eval/baselines/<engine>-<题集哈希>.json` 自动匹配；`eval-ab`/`sbs` 顺延到 S11/S14，不留空壳 |
+| 9 | S9 计划里的 `--compare <file>` / `--tag <name>` 与 `mcc eval-ab` / `mcc sbs` 落不了地 | 基线的身份就是"这张考卷的成绩"，再起一个 tag 名只会引入"拿错基线"这条错误路径；`eval-ab` 需要的配置注入面（`REPO_MAP=off/on`）在 S11 才存在 | SPEC v2 §3.2 增补 as-built 表 | 改成 `eval/baselines/<engine>-<题集哈希>.json` 自动匹配；`eval-ab`/`sbs` 顺延到 S11/S14，不留空壳。S11 到期后 A/B 落成了**脚本**而不是子命令（`scripts/b2_compact_ab.py`、`scripts/b3_repomap_ab.py`，两臂只差 `mcc eval` 的一个旗标）：A/B 是"一次有结论的实验 + 一份证据文件"，不是一条日常命令，塞进 CLI 只会让帮助文本长出一半没人用的开关 |
 | 10 | 负样本标签 `negative` 语义不唯一，第一次跑真批次就出了两条误告警 | "模拟坏行为的题"与"判据必须抓住的题"被塞进同一个标签；`bh-repeat-stall` 老实停下来本该判绿，却被叫成"判据没抓到" | 拆成两层：`negative`（描述性）与 `must-fail`（判据自检） | 新增 `must-fail`，`instrument_checks` 只对其告警；4 道题补标，题集哈希随之变化 |
 | 11 | S10 计划里的 `COMPACT_LEVEL` / `COMPACT_TARGET` 环境变量不该存在 | 阶梯阈值是**配对不变式的一部分**，做成运行时旋钮就等于允许"这一批跑的是另一套阈值"这种无法对比的状态；而 B2 需要的对照只有"开 / 关"一个自由度 | SPEC §5.3 把这两个旋钮改成 `context.py` 常量 + 三个评测旗标（`--no-compact` / `--context-budget` / `--context-hard-limit`） | 常量由 `test_compact.py` 逐条钉住；旗标进 `mcc eval`，被拧过的批次**不许当基线入库**（`--save-baseline` 直接退出码 2，除非 `--force`），并在终端自报家门"这批的分数不与默认配置批混读" |
 | 12 | 止损在 trace 里不可归因（SPEC 未预见） | `turn_start` 每轮只在请求前采样一次，而越线发生在该轮工具结果回填之后：off 臂最后一个采样 23,871 **低于** 30,400 的拒载线，只看 est 序列会把"被预算杀掉"读成"模型自己停了" | 止损自己落一条带判据字段的记录 | 新增 `context_refuse{line, threshold_tokens, est_tokens, ladder_enabled}`，`test_trace_contract.py` 的第四条会话 fixture 钉住它的形状 |
 | 13 | L2 摘要请求会吃掉 FakeLLM 的剧本队列 | `FakeLLM.create()` 每调一次弹出一条剧本，摘要共用队列 → 后续轮次整体错位，B2 首跑因此少写一份汇总模块，看起来像"压缩把 agent 压傻了" | 摘要走独立客户端；fake 引擎给它独立队列 | `Agent(summarizer_llm=...)`（live 默认与主客户端同一个）+ `demos/fakes.py::FakeSummarizer` + `EvalRunner.summarizer_for()` |
+| 14 | S11 的 `.mcc/` 缓存会同时污染判据与 A/B | 判据里有"工作副本除了答案不许有别的改动"这一条，而 agent 读文件时地图自己会往 `.mcc/` 写缓存 —— 于是一道只读题因为"看了盘"被判 fail；两臂也不同了：先跑的臂把缓存焐热，后跑的臂白捡一次热启动 | 记忆目录属于**工具副作用**，不属于源码：判据侧忽略它，隔离侧不复制它 | `eval/contract.py::NOISE` 增 `.mcc`（judge 不看、`isolate()` 不拷），每臂从空缓存开始；READONLY 模式下干脆不建 store（没写手就不留看不见的状态） |
+| 15 | SPEC §5.3 把 `REPO_MAP_TOKENS` 的 `0` 定义成"关闭地图"，与 §3.4 的开关 `REPO_MAP` 撞车 | 两个旋钮管同一件事，就必然出现"`REPO_MAP=1` 且 `REPO_MAP_TOKENS=0`"这种没人能解释的配置 | 关就关在 `REPO_MAP`，预算只当预算 | `REPO_MAP_TOKENS < 1` 在 config、CLI、`EvalRunner` 三处都拒绝（不是静默归零），关闭走 `--no-repo-map` / `REPO_MAP=0` |
 
 ---
 
@@ -575,6 +617,9 @@ mini-claude-code/
 │   ├── cli/                    build_session、REPL、渲染（rich 可选）
 │   │                           / trace_cmd（`mcc trace` 三个视图）
 │   │                           / eval_cmd（`mcc eval` 批跑入口，退出码=结论）
+│   ├── memory/                 工作记忆与仓库地图（S11）
+│   │   ├── store.py            `.mcc/memory.json`：四类记忆、指纹、原子写、坏文件退化成没缓存
+│   │   └── repo_map.py         ast 符号图 + 三条排序信号 + token 预算裁剪 + 过期只重建单文件
 │   ├── infra/
 │   │   ├── trace.py            JSONL 轨迹、replay、summarize、密钥脱敏
 │   │   └── failure.py          失败模式分类学（8 条规则，在线/离线共用）
@@ -592,10 +637,10 @@ mini-claude-code/
 │   ├── fixtures/               被刻意做成有 bug / 测试是红的小仓库（考题的靶子）
 │   │   └── ledger/             八模块 × 100 公开函数 ≈ 19.4 万字符，由脚本确定性生成
 │   ├── baselines/              `fake-<题集哈希>.json` —— B1 的基线，进版本库
-│   ├── results/                live 冒烟的报表与轨迹（live 数字不可复现，所以入库）
+│   ├── results/                验收线的证据文件（b2/b3 的 A/B 判据、live 冒烟报表；数字不可复现所以入库）
 │   └── .work/                  工作副本与逐条记录（忽略，报表与基线才提交）
-├── scripts/                    probe_caps / probe_window / b4_label_check / b2_compact_ab 等证据生成器
-├── tests/                      446 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照）
+├── scripts/                    probe_caps / probe_window / b4_label_check / b2_compact_ab / b3_repomap_ab 等证据生成器
+├── tests/                      477 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照）
 └── demos/
     ├── run_demo.py             隔离副本 → 跑真 Agent → 独立判据 → 生成证据
     ├── fake_scripts.py         FakeLLM 轨迹（脚本化，不报自述数字）
@@ -613,7 +658,9 @@ mini-claude-code/
 > 本节是 v1.0 收尾时写的展望。**v2.0 的实际计划以 [`SPEC-v2.md`](SPEC-v2.md) 为准**：下面第 1、2 项
 > 分别对应 S10/S11（压缩阶梯、仓库地图）与 S9（`eval/` 评测层），S8 已经先把"数字怎么来的"这件事
 > 修成可核对的口径（§6.4、§6.5）。**第 1 项的压缩那一半已在 S10 落地（§4.7，B2 的 fake 侧达成）；
-> 仓库地图那一半是 S11。第 2 项已在 S9 落地（§4.6，B1）。**
+> 仓库地图那一半已在 S11 落地（§4.8：`memory/repo_map.py` + `.mcc/` 工作记忆），两半判据都跑完了，
+> 结果是 **B3 未达成**：机制层 7/7 绿，因果层轮数 0%（线 ≥20%）、token +5.4%（线 ≤15%）。
+> 第 2 项已在 S9 落地（§4.6，B1）。**
 
 1. **上下文压缩 + `memory/repo_map.py`**（解锁大仓库）。压缩必须保 `tool_calls`/`tool` 配对，且压缩前后跑同一批回归测试，否则就是把 400 换成静默变笨。
 2. **`eval/` 层：把 demo 判据变成可批量跑的评测**。`AgentResult` 的形状现在就定死了，V2 直接消费，不用回改核心循环。目标是从"4 个 demo 各跑一次"升级到"20 个任务 × 5 次，报通过率与方差"。

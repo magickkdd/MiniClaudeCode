@@ -139,7 +139,7 @@ B1 是 v2 的生死线，其余五条都建立在它的输出上。**v1 的 A1�
 |---|---|---|
 | **B1** | 24 个任务 × 3 次重复**无人值守**跑完，中途 `Ctrl-C`/断电后能续跑，产出一份带置信区间的报表；报表里每个数字都能指到 trace 字段 | 判据独立执行 pytest / 行为探测（沿用 v1 的 `Check` 契约）；续跑用"已完成 run 不重复计数"断言；用 `test_metrics_have_producers`（§3.1）证明无孤儿指标 |
 | **B2** | 构造一个必然超预算的长任务（预算 = §3.3 拆分后的 `TOKEN_BUDGET=32000`；**v1 最长轨迹只有 12,185，所以这条必须新造任务，不能拿现有 demo 充数**）：压缩关闭时失败，开启时成功 | 压缩后发出 **0 次**因配对破损导致的 400（`test_compact_preserves_pairing` + 真实端点各 5 次）；摘要里必须能 grep 到本轮已改文件名 |
-| **B3** | 同一任务集，`RepoMap on` vs `off` 的配对比较 | A1 类任务 `steps_to_success` 中位数下降 **≥ 20%**，且 `context_peak` p95 上升 **≤ 15%**（map 自身字符计入估算）；两条同时成立才算数 |
+| **B3** | 同一任务集，`RepoMap on` vs `off` 的配对比较 | A1 类任务 `steps_to_success` 中位数下降 **≥ 20%**，且 `context_peak` p95 上升 **≤ 15%**（map 自身字符计入估算）；两条同时成立才算数 → **实到 2026-09-22：未达成。第二句 ✓（+5.4%），第一句 ✗（6.0→6.0，降 0%）。36 次真模型运行、机制层 7/7 全绿，所以结论是"效应不存在"而不是"实验没做成"；线不动，重测计划见 §7.3-5。全表与逐题配对见 §3.4.2** |
 | **B4** | 给 3 条真实失败轨迹，`mcc trace` 说清失败模式 | 输出的模式标签与人工判读一致（人工核对表进仓库）；渲染耗时 < 60s |
 | **B5** | 只读并发不改变语义 | 墙钟 p50 下降 **≥ 15%**；**零**次"同一 ASK 问两遍或漏问"；回填顺序与 `tool_calls` 声明顺序逐位一致（测试钉）；trace 无交错坏行 |
 | **B6** | 同一任务在 local 与 docker backend 上判定一致 | 两后端各跑同一子集，`verdict` 与 `Check` 列表完全一致；docker 不可用时**明确降级并在报表标注**，不许静默换后端 |
@@ -502,7 +502,7 @@ mcc sbs --task fix-taxed-base --run-a 954b17 --run-b 6bee37                 # �
 | 计划 | 实际 | 为什么 |
 |---|---|---|
 | `--compare <file>` + `--tag <name>` | `--save-baseline` 写 `eval/baselines/<engine>-<taskset_sha>.json`；后续批次**自动按题集哈希**找它，也可 `--baseline <file>` 显式指定 | 基线的身份就是"这张考卷的成绩"，再套一个人类起的 tag 名只会引入"拿错基线"这条错误路径 |
-| `mcc eval-ab --a/--b` | 未做。配对比较目前靠"两次批次各留一份 report.json，用同一份基线比" | `--a/--b` 需要配置注入面（`REPO_MAP=off/on` 这类开关在 S11 才存在），现在做了就是空壳 |
+| `mcc eval-ab --a/--b` | 未做成子命令。配对比较落在 `scripts/b2_compact_ab.py` / `scripts/b3_repomap_ab.py`，两臂只差 `mcc eval` 的一个旗标 | 原计划说"等 S11 的开关"。开关到了，子命令还是没做：A/B 的产物是**一份带判据的证据文件 + 一个退出码**，那是实验脚本的形状，不是日常命令的形状。塞进 CLI 只会让 `mcc eval --help` 长出十个只服务于一次实验的旗标 |
 | `mcc sbs` | 未做，S14 随偏好数据一起做 | 没有 `labels.jsonl` 的来源之前，并排 UI 只是给人看的 |
 | `judge_x(ctx) -> list[Check]`，一任务一函数 | `judge.py` 里**一条十步固定顺序**判据流水线，任务只提供参数 | 24 个 judge 函数会长出 24 种"什么算成功"的定义。搬成参数之后判据只有一处，判据 bug 也只有一处 |
 
@@ -659,6 +659,90 @@ class MemoryStore:
 
 **`.mcc/` 必须是 `Workspace.ignored_dirs` 的新成员**（`workspace.py:15`），否则 agent 会把自己的记忆缓存当代码读进去，然后开始给自己写笔记 —— 一条真实的自我强化回路。
 
+### 3.4.1 实到（S11 落地后补，2026-09-22）
+
+规格这节给的接口形状基本照搬落地了（`build/relevant/invalidate` 三个方法、三信号排序、条目带理由、
+`.mcc` 进忽略表）。落地时规格没预见、但必须由代码决定的六件事：
+
+1. **`map_provider` 还不够，得有 `Agent(system_provider)`。** 规格说"把 `max_map_lines` 换成 `map_provider`"
+   就够了 —— 但地图的内容会随**写文件**变（新文件要出现在图里），而 `prompts.py` 的纪律是"system 里只放
+   整个会话内稳定的内容"。两者只 reconcile 得了一次：把整段 system 做成一个 provider，由 loop 在指纹变化
+   时重取（`loop._system()` = base/`system_provider()` + notes + todos），其余轮沿用同一个字符串。
+   `test_a_read_never_re_renders_the_map_mid_session` 钉的就是这个不抖。
+2. **能解析的文件必须永远占一行。** `render_file_lines()` 原本在"没有模块级符号"时返回 `[]`，而 `_score()`
+   跳过空条目 —— 于是 `hello.py` 这种纯脚本**从地图上消失了**，测试是 `test_build_session_wires_everything`
+   逮到的。现在第 0 行固定是文档哨兵（无文档时 `·`）：地图的第一职责是"这个文件存在"，符号是第二职责。
+   只留"解析被跳过"（语法错误、超字节上限）才可能空。
+3. **信号 ① 按规格写会死在实现里。** 规格说焦点取自"最近 `edit_file`/`read_file` 目标"，但读文件**不触发重画**
+   （第 1 条那条纪律），所以只喂读就等于喂了一个永远看不见的信号。as-built：`observe_paths()` 同时接受读与
+   **成功的写**（`FOCUS_READ_TOOLS` / `FOCUS_WRITE_TOOLS`，`loop._observe_repo_map`），被权限门拒绝的写不喂
+   —— 没发生的动作不该影响排序（`test_a_denied_write_leaves_the_map_alone`）。另外 `reset()` 清空焦点：
+   新任务不该被上一个任务读过的文件带着排（`test_reset_clears_the_focus_of_the_previous_task`）。
+4. **`READONLY` 臂不落盘，`.mcc` 同时从判定眼里消失。** demo 的只读问答一跑，`.mcc/memory.json` 就写进了
+   工作副本，A3（"只读模式真的没改任何文件"）当场破。两层各管一件事，缺一不可：① 只读模式**根本不建 store**
+   （`cli/main.py: writable = mode is not READONLY`）—— A3 靠构造成立，而不是靠"写了但判据白名单掉"；
+   ② `.mcc` 进 `eval/contract.py:NOISE`，AUTO 批跑自己留下的缓存不能被算成"改了源码"（同一份 NOISE 还给
+   `isolate()` 用，所以考题工作副本永远从空缓存起步，两臂都是冷启）。
+5. **`REPO_MAP_TOKENS` 是预算，不是开关。** 规格表里写的"`0` = 关闭"取消：关地图只有一个开关 `REPO_MAP=0`
+   （CLI `--no-repo-map`），预算 `REPO_MAP_TOKENS` 至少 1，`<1` 在 config / CLI / `EvalRunner` 三处各自拒绝。
+   理由是 B3 要求"两臂只差一个开关"——如果预算 0 也能关地图，就有两条路径产出"看起来一样但来源不同"的
+   对照组，报表读不出这批是怎么关的。
+6. **`repo_map` 是 trace 的第 14 种事件，字段进快照契约。** `turn=0` 一条（建图）+ 每次重画一条，
+   `tests/schema_v2.json` 钉 26 个字段；`test_repo_map_events_land_in_the_trace` 要求一次"写文件"的会话
+   恰好两条、轮次 `[1,2]`。地图若开始每轮抖，这条契约先红。
+
+**未落地的规格项**：`MemoryStore` 的 `TEST_COMMAND/CONVENTION/GOTCHA` 三类笔记这一版只有读渲染
+（`notes_for_prompt`）与手工 `put`，**没有产生者** —— 观察→写笔记的回路挂在 S13（它要和
+`MEMORY_DIR`、快照一起设计才有意义：跨会话写盘的每一步都是 §6.3-2 的攻击面）。当前唯一自动写的是
+`REPO_MAP` 缓存。
+
+### 3.4.2 B3 实测（2026-09-22，`scripts/b3_repomap_ab.py --live`，证据 `eval/results/b3-repomap-ab.json`）
+
+**考卷**：`tag=bugfix` 的 6 道 A1 题 × 3 次 × 2 臂 = **36 次真模型运行**，两臂只差 `--no-repo-map` 一个开关。
+额度实际花掉 off 臂 649,744 + on 臂 610,767 = **1,260,511 tokens**。
+
+**机制层（7 条，全绿）**
+
+| 判据 | 实到 |
+|---|---|
+| `arms_differ_by_exactly_one_switch` | 两臂 argv 只差 `['--no-repo-map']`，题集/重复数/引擎/预算全同 |
+| `map_replaces_the_tree_not_adds_to_it` | system 净增 +783 ~ +1,377 字符/题（不是把目录树+地图叠起来） |
+| `map_is_counted_into_context` | on 臂首轮 `est_tokens` 比 off 高 +235 ~ +406 → 地图确实计进了 `context_peak` 口径 |
+| `off_arm_renders_no_map_at_all` | off 臂 `repo_map` 事件 **0** 条 · on 臂 14 条 |
+| `two_arms_do_not_share_a_system_prompt` | 6 题逐题哈希跨臂都不同（`bh:d94487≠2c0872` …） |
+| `zero_extra_llm_calls` | 两臂各 **33 / 33** 次 `llm_request` |
+| `map_lists_every_a1_module` | 6 题的公开模块**未列出 0 项**，预算统一 1,500 tokens，最大一题只用 427 est tokens |
+
+**因果层（B3 的那两句，判定：不过）**
+
+| 判据 | 线 | 实到 | 判定 |
+|---|---|---|---|
+| `steps_to_success_median_drops_20pct` | 中位轮数降 ≥20% | off **6.0** → on **6**（降幅 0%） | ✗ |
+| `context_peak_p95_rise_le_15pct` | 峰值涨幅 ≤15% | 7,711 → 8,129（**+5.4%**） | ✓ |
+| `on_arm_does_not_win_by_losing_tasks` | on 臂通过数 ≥ off 臂 | 14/18 → **13/18** | ✗ |
+| `every_run_in_both_arms_is_judged` | 无 error/aborted | 崩掉的 run：无 | ✓ |
+
+逐题配对（steps 中位数、通过次数、平均峰值，off→on）：
+
+| 题 | steps | 通过 | peak |
+|---|---|---|---|
+| `bh-format-duration` | — → — | **0/3 → 0/3** | 5,005→4,992 |
+| `rt-checkout-bulk` | 5 → **4** | 3/3 → 3/3 | 7,036→7,105 |
+| `session-fix-humanize-only` | 6 → **4** | 3/3 → 3/3 | 4,953→**4,538** |
+| `session-fix-ttl-units` | 7.5 → 8.0 | 2/2 → 2/2 | 6,866→7,033 |
+| `slug-dedup-clean-rule` | 7 → 6.5 | 3/3 → **2/3** | 6,083→6,787 |
+| `taxed-fix-eu-vat` | 6 → 8 | 3/3 → 3/3 | 6,337→6,820 |
+
+**结论：B3 未达成，而且这是一次有效的证伪，不是一次失败的实验。**
+
+1. 地图**很便宜**：p95 只涨 5.4%（线是 15%），零额外调用，且它的 token 是按口径计进 `context_peak` 的 —— 便宜不是靠漏记买来的。
+2. 地图**没有把 A1 变快**：中位数纹丝不动 6.0→6.0。6 题里 3 题变快（`rt-checkout-bulk` 5→4、`session-fix-humanize-only` 6→4、`slug-dedup-clean-rule` 7→6.5）、2 题变慢（`session-fix-ttl-units` 7.5→8.0、`taxed-fix-eu-vat` 6→8）、1 题两边都没有通过样本。中位数对这种"两两抵消"的形状天然迟钝，所以逐题表必须一起看 —— 但换任何聚合都变不出一个 20% 的下降。
+3. **有效样本比 6 题小**：`bh-format-duration` 两臂 3 次全灭，`steps_to_success` 只统计通过的 run，它贡献 0 —— 这份中位数实际是 **5 题 × 3 次**的。on 臂还少一次通过，所以"没降"不是幸存者偏差造成的。
+4. 那道全灭的题值得单独记：两臂都在同一处栽（与地图无关），说明它是**考卷或能力**的问题而不是对照实验的问题 —— 已进 S12 之后的待查项。
+5. **线保持原样**。不改 20%、不加"或者至少某几题变快"这种后半句。§6.2 那三条时间线的账在 §6.2.1，它们是另一回事（且其中冷建那条也不过）。
+
+**由此产生的规格判断（写下来，免得下次靠感觉）**：`RepoMap` 的价值主张在 A1（"定位一个已知存在的 bug"）上不被支持，因为这类题的定位本来就是"搜一个符号名 → 读两个文件"，目录树和符号地图给的是同一条路径。它可能真正起作用的地方是**跨文件的大仓库**（JD 第 8 项的"陌生大仓库"、A3 只读问答的广度扫描），而这恰好是本题集里没有的形状。所以：机制保留（它几乎免费，且在 `session-fix-humanize-only` 与 `rt-checkout-bulk` 上各带来 −2 轮），**不再为 B3 追加额度重跑**，把它降级成"待验证假设"记在 §7.3；下一批若要重测，考卷要换成跨 ≥5 文件的改动题。
+
 ## 3.5 Scheduler — 只读工具并发（S12，5h · **B5**）
 
 **现状**：`_run_tools()`（`loop.py:213`）单 for 循环，注释明确写着"刻意不并发 —— 副作用顺序必须与模型声明顺序一致"。v2 只在这个理由**不成立**的那部分放开并发。
@@ -695,6 +779,8 @@ def parallelizable(call, decision) -> bool:
 | `Workspace` | `workspace.py` | frozen dataclass 且方法无状态 → 只读安全，无需改动 |
 
 **收益先测再改**：S8 的 trace 新增 `parallelizable_in_round`（本轮可并行的调用数）。先在真实轨迹上统计分布，**若可并行轮占比 < 20%，把 S12 整段推到 Tier 3**，因为那说明模型很少一次发多个只读调用 —— 这时候并发的正确性成本换不到收益。这条判断由 S9 的数据做，不由我做。
+
+> **S11 时核对的缺口**：`parallelizable_in_round` 这个字段 S8 并没有实现（`grep -rn parallelizable src/` 为空，`tests/schema_v2.json` 里也没有）。所以这道数据闸**不会**由一个现成的计数列交付，只能从 `llm_response.blocks` 里的 `tool_use` 个数反推 —— 反推规则（哪些调用算"可并行"）必须与将来 `parallelizable()` 的实现同源，否则闸本身就不是同一把尺。见 §7.2 行 12 的前置任务。
 
 ## 3.6 ExecutionBackend — 沙箱与 Durable 会话（S13，10h · **B6**）
 
@@ -884,7 +970,8 @@ class LocalBackend / DockerBackend / ExecutionBackend(Protocol)
 | `CONTEXT_COMPACT` | `1` | 新增。`0` = 整个阶梯不开（L3 拒载与硬熔断照旧）—— B2 的对照组靠它，命令行是 `mcc eval --no-compact` |
 | ~~`COMPACT_LEVEL`~~ | — | **未落地，S10 as-built 改动**：层级触发点是 `context.py` 的常量（`L1_ELIDE_PRESSURE=0.70 / L1_TARGET_PRESSURE=0.65 / L2_SUMMARIZE_PRESSURE=0.85 / L3_REFUSE_PRESSURE=0.95 / HARD_FUSE_RATIO=0.90`），由 `test_compact.py` 逐条钉住。再叠一个 `off/l1/l2` 环境变量只会让"报表里那次跑的是哪套阈值"变成猜 —— A/B 需要的是**一次一个变量**，所以给的是 `--no-compact` / `--context-budget` / `--context-hard-limit` 三个评测旗标，而不是五个旋钮 |
 | ~~`COMPACT_TARGET`~~ | — | 同上，`L1_TARGET_PRESSURE` 是常量 |
-| `REPO_MAP_TOKENS` | `1500` | 地图预算；`0` = 关闭 |
+| `REPO_MAP` | `1` | **S11 实到新增**（规格里只有下面那个预算项）。`0` = 不画符号地图，system 退回 v1 的 30 行目录树 —— B3 的对照组只有这一个开关，命令行 `mcc eval --no-repo-map` |
+| `REPO_MAP_TOKENS` | `1500` | ~~`0` = 关闭~~ → **S11 as-built：纯预算，至少 1**。`<1` 在 `config.from_env` / CLI / `EvalRunner` 三处各自拒绝，关闭只走 `REPO_MAP=0`（原因见 §3.4.1-5：对照组必须只有一个来源） |
 | `MEMORY_DIR` | `.mcc` | 工作记忆目录（自动进 `IGNORED_DIRS`） |
 | `MAX_PARALLEL_READS` | `1` | **默认 1 = 不并发**，显式设 >1 才启用（B5 由 A/B 决定默认值） |
 | `EXECUTION_BACKEND` | `local` | `local` / `docker` / `auto` |
@@ -939,6 +1026,24 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 
 **每轮新增开销上限：50 ms**（`snapshot` 与 L2 只在触发时计）。这条逼着我们把"每次改动都全量重建地图""每次写都提交 git"这类偷懒实现挡在前面。
 
+### 6.2.1 S11 as-built 实测（2026-09-22，证据：`eval/results/b3-repomap-ab.json` 的 `timings` / `budget_lines` / `amendments`）
+
+量的是**本仓库自己**，口径 = `RepoMap.stats.modules_found`（142 个 `.py`；`.venv`、`__pycache__`、`.mcc`、隐藏目录按 `_python_files` 排除 —— 把第三方库算进预算只会把线说得比实际更宽松，`find` 到的 2,334 个 `.py` 里绝大多数是依赖）。每次调用取 5 个样本的中位数，跨 7 次独立调用：
+
+| 线 | 实到 | 判定 |
+|---|---|---|
+| 冷建 `RepoMap.build` ≤800ms | 7 次调用的中位数依次 556.8 / 602.2 / 711.9 / 829.1 / 941.6 / 968.5 / 1,381.3ms，**总中位 829.1ms**；最后一次调用内 5 个样本 858~1,105ms | **不过**（超线 ~3.6%） |
+| 缓存命中建图 ≤5ms | 进程内 memo 六次采样 4.0 / 4.0 / 4.1 / 5.7 / 7.8 / 9.4ms；跨进程命中磁盘缓存 27.9~99.4ms | memo **半数达标**（同样负载决定）；跨进程**不过** |
+| 每轮附加开销 ≤50ms | 每轮至多一次渲染，中位 **0.0003ms/轮** | 达标（离线 5 个数量级） |
+
+三条结论，都不是把线改成能过的数：
+
+1. **冷建这条线真正的约束是"别每轮重建"，而不是"冷建必须多快"。** 冷建一次的成本 = 文件数 × 每文件成本，实测每文件 **4~7ms**（读 + `ast.parse` + 打分），而 `≤800ms @ <2000 文件` 隐含 **0.4ms/文件** —— 规格自己的两个数不自洽，差一个数量级。按实测斜率，这条线的天花板在 **~120 文件**，本仓库 142 个已经在外面。要撑到 2000 文件得换机制（增量/懒建 + 只解析改动文件），不是换个数字。
+2. **这条线在 Windows 上是负载敏感的**：同一份代码，空载 556.8ms、边跑 477 项测试 829.1ms、仓库被索引时 968.5~1,381.3ms。所以 §6.2 的判定应当永远写"几次独立调用的分布"而不是单点 —— 单点会随机外负载翻成"过/不过"。`budget_lines` 因此按**本次样本中位数**判，并保留 `cold_build_history_ms_across_invocations` 全列。
+3. **跨进程缓存命中做不到 5ms 是因为指纹纪律**：§3.4 要求"以磁盘状态为准"，命中前必须对每个文件 `stat` 一次比 `mtime+size`，142 个文件就是 27.9~99.4ms。压到 5ms 只能靠不信指纹 —— 那正是 §2.3-1 禁止的"以缓存为准"。**所以这条线拆成两条记账**：进程内 memo（达标）与跨进程冷启（不达标，且刻意不达标）。
+
+增量重建本身是做到了的：`test_a_stale_fingerprint_rebuilds_only_that_file` 钉住"只有指纹过期的那一个文件被重新解析"，`test_map_for_prompt_does_not_jitter` 钉住"每轮不重画"。也就是说 §6.2 写这条线时要防的那件事（每轮全量重建）没有发生，发生的是"一次冷建比我愿意承认的更贵"。
+
 ## 6.3 安全边界（v2 新增攻击面）
 
 1. **MCP 远端工具**：默认 `EXECUTE` 风险 + 命名空间前缀 + 不得覆盖本地工具名（测试钉）。
@@ -967,7 +1072,7 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 | **8** ✅ | §3.1 度量修补 + trace v2 + schema 契约 + 失败分类学 + `mcc trace` | 8h | E1/E2/E3 关闭；`test_metrics_have_producers` 绿；对 3 条真实失败轨迹人工核对模式标签（B4 的前半）→ **实到 16 条全核对、`scripts/b4_label_check.py` 退出码 0** |
 | **9** ✅ | §3.2 `eval/`：从 `run_demo.py` 抽 `judge/Check/prepare` → `eval/`；任务集 24 个；runner + 指标 + 断点续跑 + 批次预算 | 14h | 24 任务 fake 引擎全跑通（秒级）+ 6 任务 live 冒烟；一份 `eval/baselines/` 基线文件入库（**B1**）→ **实到：fake 72 次运行 `pass@1=20/24`，12 个 fail 全是 `must-fail` 负样本，退出码 0，p50 930ms / p95 6,880ms；基线 `eval/baselines/fake-0935fa95ca49.json` 已入库；live 冒烟 4/6（证据见 §3.2 末尾与 `eval/results/`）；评测层 113 项测试（全仓 382）** |
 | **10** ◐ | §3.3 压缩阶梯 L1+L2 + `assert_pairing` | 10h | **B2**：超预算任务 0 个 400、压缩后成功率 ≥60%；8 项压缩测试绿 · **实到（2026-09-22，`eval/results/b2-compact-ab.json`，12 条判据全绿）**：off 臂第 5 轮 31,287 est 越 `l3_refuse`（阈值 30,400、`ladder_enabled=false`）→ fail/context_overflow；on 臂 19 轮 pass、14 次压缩（L1 12 · L2 2）、省 95,586 est、摘要开销 3,900 tokens、**0 次因配对放弃、0 个配对 400**、摘要清单存活 6/8 个已改文件名；压缩+配对测试 **51 项**绿（要求 ≥8）。**未完成的一半**：真实端点各 5 次的成功率 ≥60% 与"端点侧 0 个 400"要靠 `scripts/b2_compact_ab.py --live`（`--live` 已实现，尚未跑） —— fake 引擎不发 HTTP，它只能证明配对*结构*合法 |
-| **11** | §3.4 `RepoMap` + `MemoryStore` + `.mcc/` | 8h | **B3** 的 A/B 报告（有/无地图）产出真实 delta；地图开销在 §6.2 预算内 |
+| **11** ◐ | §3.4 `RepoMap` + `MemoryStore` + `.mcc/` | 8h | **B3** 的 A/B 报告（有/无地图）产出真实 delta；地图开销在 §6.2 预算内 → **实到（2026-09-22，`eval/results/b3-repomap-ab.json`）**：36 次真模型运行（6 题 × 3 × 2 臂，1,260,511 tokens），两臂只差 `--no-repo-map`；机制层 **7/7 全绿**（地图换掉目录树、净增 +783~+1,377 字符/题、首轮 est +235~+406 计入 `context_peak`、off 臂 0 条 `repo_map` 事件、两臂 system 逐题哈希不同、`llm_request` 33/33 相等、6 题模块未列出 0 项）；因果层 **未达成** —— `context_peak` p95 **+5.4%** ✓ 而 `steps_to_success` 中位 **6.0→6.0（降 0%）** ✗，防幸存者那条也 ✗（通过 14→13）。**这是一次有效的证伪**：地图便宜到几乎免费，但没把 A1 变快，20% 这条线不被本模型 × 本题集支持，线保持原样（见 §3.4.2）。§6.2 的账另核：每轮开销 0.0003ms ✓、进程内 memo 4.0~9.4ms 半数达标、跨进程缓存命中 27.9~99.4ms ✗（指纹纪律所致）、冷建 557~1,381ms 总中位 829ms ✗（见 §6.2.1） |
 
 **Tier 1 结束时该项目就已经回答了 JD 第 7、8、13 三项**，且带着别人抄不走的证据：一条完整的"改动 → 配对回归 → 数字差值"链路。
 
@@ -986,6 +1091,7 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 2. trajectory exporter + SBS 标注闭环（4h）
 3. OTLP 导出器（3h）—— 字段已在 S8 对齐，这一步只有翻译
 4. 弱/强模型对照实验（4h）—— "弱模型 + 好架构 vs 强模型 + 糙架构"，v1 §7.3 许的愿，现在有了跑批能力才真的能还
+5. **B3 的重测：换考卷而不是换线（4h）** —— S11 把 B3 证伪在 A1 形状上（§3.4.2：地图 +5.4% 峰值、0% 轮数下降）。要判断"符号地图到底有没有用"，需要的是**跨 ≥5 文件的改动题**与**陌生大仓库的只读问答**这两类形状，而现有 24 题里没有。额度按 36 次 ≈ 126 万 tokens 的那次实到估：换考卷重测一次 ≈ 再花一倍。排在 Tier 3 而不是立刻做，因为先要把题做出来（S13 之后有 durable 会话才跑得起长题）。
 
 ## 7.4 超时砍单顺位（现在就定）
 

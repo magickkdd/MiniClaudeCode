@@ -154,6 +154,8 @@ class EvalRunner:
         context_compact: bool | None = None,
         context_budget: int | None = None,
         context_hard_limit: int | None = None,
+        repo_map: bool | None = None,
+        repo_map_tokens: int | None = None,
     ) -> None:
         if engine not in ("live", "fake"):
             raise ValueError(f"engine 只能是 live/fake，收到 {engine!r}")
@@ -177,10 +179,14 @@ class EvalRunner:
         self.context_compact = context_compact
         self.context_budget = context_budget
         self.context_hard_limit = context_hard_limit
+        self.repo_map = repo_map
+        self.repo_map_tokens = repo_map_tokens
         if context_budget is not None and context_budget < 1:
             raise ValueError("context_budget 至少 1；要让阶梯不生效请用 context_compact=False")
         if context_hard_limit is not None and context_hard_limit < 1:
             raise ValueError("context_hard_limit 至少 1；要关掉止损闸门请抬高它，别设 0")
+        if repo_map_tokens is not None and repo_map_tokens < 1:
+            raise ValueError("repo_map_tokens 至少 1；要让地图完全不上身请用 repo_map=False（B3 的对照臂）")
         self.spent_tokens = 0
         self.aborted = False
         self.manifest = self.out / "manifest.jsonl"
@@ -359,6 +365,10 @@ class EvalRunner:
             overrides["token_budget"] = self.context_budget
         if self.context_hard_limit is not None:
             overrides["context_hard_limit"] = self.context_hard_limit
+        if self.repo_map is not None:
+            overrides["repo_map"] = self.repo_map
+        if self.repo_map_tokens is not None:
+            overrides["repo_map_tokens"] = self.repo_map_tokens
         return replace(
             base, project_root=workdir, trace_path=trace, max_turns=task.max_turns, **overrides
         )

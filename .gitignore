@@ -13,3 +13,6 @@ demos/.work/
 
 # mcc eval 的工作副本与逐条记录；报表与基线要提交
 eval/.work/
+
+# agent 自己的记忆缓存（.mcc/）：派生物，任何时候可重建，不进版本库
+.mcc/

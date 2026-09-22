@@ -1,0 +1,1354 @@
+{
+  "a1_class": {
+    "tag": "bugfix",
+    "tasks": [
+      "bh-format-duration",
+      "rt-checkout-bulk",
+      "session-fix-humanize-only",
+      "session-fix-ttl-units",
+      "slug-dedup-clean-rule",
+      "taxed-fix-eu-vat"
+    ],
+    "why": "A1 = 一句话定位并修好一个 bug；tag=bugfix 的 6 题就是它，且全部 supports_live"
+  },
+  "amendments": [
+    {
+      "because": "这条线**处在测不准的状态**，而实现没变：空载三次调用 556.8/602.2/711.9ms，边跑 477 项测试时 829.1ms，仓库被索引/杀软在扫时 968.5 与 1,381.3ms。下界在线内、上界在线外 70% —— 所以'过没过'回答的是当时谁在用这台机器。本条按**本次样本的中位数**判，不挑空载那一次宣称达标。真正该钉住的是'别每次改动都全量重建'（§6.2 写这条线的目的），而增量重建已经按文件指纹做到了（`test_a_stale_fingerprint_rebuilds_only_that_file`）；800ms 在 142 文件上只剩 ~12% 余量这件事，写成 SPEC §6.2 的 as-built 结论。",
+      "id": "cold_build_within_budget",
+      "measured_ms": 941.6484
+    },
+    {
+      "because": "SPEC 写 ≤5ms 时想的是进程内 memo（实测 7.802ms，达标）。跨进程那一层做不到，是因为§3.4 要求'以磁盘状态为准'：命中缓存前必须对每个文件 stat 一次比 mtime+size，142 个文件就是 36.802ms。把它压到 5ms 只能靠不信指纹 —— 那正是 §2.3-1 禁止的'以缓存为准'。所以线保持原样，as-built 记为两条：memo 达标、跨进程冷启不达标。",
+      "id": "cache_hit_within_budget",
+      "measured_ms": 36.802
+    },
+    {
+      "because": "不修改线本身，改的是**线的适用范围**：§6.2 的 '<2000 文件' 应当写成'≤200 文件'，或者把这条预算换成斜率式（≤6ms/文件 + 冷建绝对上限）。留在这里而不是悄悄改 SPEC：B3 的两句判据与它无关，但它决定了地图能不能长大 —— 见 SPEC §3.4.2 的规模外推。",
+      "id": "cold_build_scope_is_self_consistent",
+      "measured_ms": 6.631
+    }
+  ],
+  "arms": {
+    "off": {
+      "argv": [
+        "--no-repo-map"
+      ],
+      "label": "对照组：system 里是 v1 的 30 行目录树"
+    },
+    "on": {
+      "argv": [],
+      "label": "实验组：system 里是 ast 符号地图"
+    }
+  },
+  "b3": "未达成：机制层 7 条全绿，因果层不过的是 steps_to_success_median_drops_20pct, on_arm_does_not_win_by_losing_tasks；结论是**证伪而不是无效**：地图确实被送进 system、确实几乎免费、确实没有多花一次调用，但它没有把 A1 的轮数压下来 —— 20% 这条线在本模型 × 本题集上不被支持，线保持原样，不改成能过的数",
+  "budget_lines": [
+    {
+      "amendment": "这条线**处在测不准的状态**，而实现没变：空载三次调用 556.8/602.2/711.9ms，边跑 477 项测试时 829.1ms，仓库被索引/杀软在扫时 968.5 与 1,381.3ms。下界在线内、上界在线外 70% —— 所以'过没过'回答的是当时谁在用这台机器。本条按**本次样本的中位数**判，不挑空载那一次宣称达标。真正该钉住的是'别每次改动都全量重建'（§6.2 写这条线的目的），而增量重建已经按文件指纹做到了（`test_a_stale_fingerprint_rebuilds_only_that_file`）；800ms 在 142 文件上只剩 ~12% 余量这件事，写成 SPEC §6.2 的 as-built 结论。",
+      "claim": "全量建图 ≤800ms（<2000 文件档）",
+      "detail": "142 个文件，5 次冷建中位 941.6484ms（858.7392~1105.4198ms）· 跨 7 次独立调用的中位数区间 556.822~1381.2829ms",
+      "id": "cold_build_within_budget",
+      "measured_ms": 941.6484,
+      "ok": false
+    },
+    {
+      "amendment": "SPEC 写 ≤5ms 时想的是进程内 memo（实测 7.802ms，达标）。跨进程那一层做不到，是因为§3.4 要求'以磁盘状态为准'：命中缓存前必须对每个文件 stat 一次比 mtime+size，142 个文件就是 36.802ms。把它压到 5ms 只能靠不信指纹 —— 那正是 §2.3-1 禁止的'以缓存为准'。所以线保持原样，as-built 记为两条：memo 达标、跨进程冷启不达标。",
+      "claim": "缓存命中建图 ≤5ms",
+      "detail": "跨进程命中磁盘缓存 36.802ms（复用 142 条符号行） · 同实例再 build 只要 7.802ms",
+      "id": "cache_hit_within_budget",
+      "measured_ms": 36.802,
+      "ok": false
+    },
+    {
+      "claim": "每轮附加开销 ≤50ms",
+      "detail": "每轮至多一次渲染，中位 0.0003ms/轮（142 文件规模下地图 5,088 字符 / 1,453 est tokens，超出预算的部分由裁剪兜住）",
+      "id": "per_turn_overhead_within_budget",
+      "measured_ms": 0.0003,
+      "ok": true
+    },
+    {
+      "amendment": "不修改线本身，改的是**线的适用范围**：§6.2 的 '<2000 文件' 应当写成'≤200 文件'，或者把这条预算换成斜率式（≤6ms/文件 + 冷建绝对上限）。留在这里而不是悄悄改 SPEC：B3 的两句判据与它无关，但它决定了地图能不能长大 —— 见 SPEC §3.4.2 的规模外推。",
+      "claim": "≤800ms 这条线在'<2000 文件'的规模下自洽吗",
+      "detail": "实测每文件 6.631ms（读 + ast.parse + 打分，冷建中位 941.6484ms / 142 文件），而这条线配 2000 文件要求 0.4ms/文件 —— 差 16.6 倍。按这个斜率，120 文件就是这条线的天花板（本仓库 142 文件，本次样本已经破线）",
+      "id": "cold_build_scope_is_self_consistent",
+      "measured_ms": 6.631,
+      "ok": false
+    }
+  ],
+  "clauses": [
+    {
+      "claim": "两臂只差 --no-repo-map：同题集、同重复数、同引擎、同预算",
+      "detail": "6 题 × 1 次 · 对照组开关 ['--no-repo-map']",
+      "id": "arms_differ_by_exactly_one_switch",
+      "ok": true
+    },
+    {
+      "claim": "地图是**替换**目录树，不是加在后面（否则涨幅是两份的钱）",
+      "detail": "bh-format-duration: +1336 字符、rt-checkout-bulk: +1377 字符、session-fix-humanize-only: +805 字符、session-fix-ttl-units: +805 字符、slug-dedup-clean-rule: +783 字符、taxed-fix-eu-vat: +1037 字符",
+      "id": "map_replaces_the_tree_not_adds_to_it",
+      "ok": true
+    },
+    {
+      "claim": "地图自身的 token 计入上下文估算（B3 第二条判据的口径）",
+      "detail": "on 臂首轮 est 每题比 off 高 bh-format-duration:+378、rt-checkout-bulk:+406、session-fix-humanize-only:+242、session-fix-ttl-units:+243、slug-dedup-clean-rule:+235、taxed-fix-eu-vat:+310",
+      "id": "map_is_counted_into_context",
+      "ok": true
+    },
+    {
+      "claim": "对照组一次地图都没画（否则两臂比的不是地图）",
+      "detail": "off 臂 repo_map 记录 0 条 · on 臂 14 条",
+      "id": "off_arm_renders_no_map_at_all",
+      "ok": true
+    },
+    {
+      "claim": "同一道题在两臂里拿到的 system 哈希不同，且每题各自稳定（注入的内容真的变了）",
+      "detail": "bh:d94487≠2c0872、rt:311dd8≠68814f、session:33258a≠aac675、session:4f4f8a≠55d1f8、slug:623d1b≠55d035、taxed:fcdb85≠21aa85",
+      "id": "two_arms_do_not_share_a_system_prompt",
+      "ok": true
+    },
+    {
+      "claim": "建图一次模型调用都不多花（SPEC §6.2 的 0 extra calls）",
+      "detail": "两臂各 33 / 33 次 llm_request，轮数 33",
+      "id": "zero_extra_llm_calls",
+      "ok": true
+    },
+    {
+      "claim": "六道考题的模块全部列出且每条自带理由（地图先要完整，才谈得上有用）",
+      "detail": "未列 0 项：True · token 预算统一 1500 · 最大一题 427 est tokens",
+      "id": "map_lists_every_a1_module",
+      "ok": true
+    },
+    {
+      "claim": "A1 类 steps_to_success 中位数降 ≥20%",
+      "detail": "off 中位 6.0 轮 → on 中位 6 轮，降幅 0%；逐题变快的有 3/6：['rt-checkout-bulk', 'session-fix-humanize-only', 'slug-dedup-clean-rule']",
+      "id": "steps_to_success_median_drops_20pct",
+      "ok": false
+    },
+    {
+      "claim": "context_peak p95 涨幅 ≤15%",
+      "detail": "off p95 7,711 → on p95 8,129，涨幅 +5.4%",
+      "id": "context_peak_p95_rise_le_15pct",
+      "ok": true
+    },
+    {
+      "claim": "防幸存者偏差：on 臂通过数不得少于 off 臂（只拿赢家的轮数比中位会骗人）",
+      "detail": "通过 off 14/18 · on 13/18",
+      "id": "on_arm_does_not_win_by_losing_tasks",
+      "ok": false
+    },
+    {
+      "claim": "两臂都没有 error/aborted：否则两组中位数量的不是同一件事",
+      "detail": "崩掉的 run：无",
+      "id": "every_run_in_both_arms_is_judged",
+      "ok": true
+    }
+  ],
+  "fake": {
+    "off": {
+      "argv": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+        "--tag",
+        "bugfix",
+        "--engine",
+        "fake",
+        "--repeats",
+        "1",
+        "--budget-tokens",
+        "10000000",
+        "--out",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\b3-ab\\fake-off",
+        "--no-repo-map"
+      ],
+      "argv_common": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+        "--tag",
+        "bugfix",
+        "--engine",
+        "fake",
+        "--repeats",
+        "1",
+        "--budget-tokens",
+        "10000000"
+      ],
+      "arm_flags": [
+        "--no-repo-map"
+      ],
+      "batch": {
+        "aborted_batch": false,
+        "context_peak_p95": 0,
+        "cost_est_total": null,
+        "denial_rate": 0.0,
+        "engine": [
+          "fake"
+        ],
+        "failure_mode_dist": {
+          "self_confirm": 1
+        },
+        "pass_at_1": 1.0,
+        "pass_at_1_raw": "6/6",
+        "pass_at_k": 1.0,
+        "pass_at_k_raw": "6/6",
+        "repeated_call_rate": 0.0,
+        "repeats": 1,
+        "runs": 6,
+        "stalled_group_rate": 0.0,
+        "steps_to_success_median": 4.0,
+        "success_rate_ci": [
+          0.6097,
+          1.0
+        ],
+        "tasks": 6,
+        "tokens_per_success": 0,
+        "tokens_total": 0,
+        "tool_error_rate": 0.0,
+        "tool_executed": 39,
+        "verdicts": {
+          "error": 0,
+          "fail": 0,
+          "pass": 6
+        },
+        "wall_time_p50_ms": 2030,
+        "wall_time_p95_ms": 6034,
+        "wasted_output_ratio": 0.0
+      },
+      "engine": "fake",
+      "exit_code": 0,
+      "first_est_by_task": {
+        "bh-format-duration": 1595,
+        "rt-checkout-bulk": 1560,
+        "session-fix-humanize-only": 1589,
+        "session-fix-ttl-units": 1574,
+        "slug-dedup-clean-rule": 1589,
+        "taxed-fix-eu-vat": 1574
+      },
+      "llm_calls": 33,
+      "map_events": 0,
+      "map_last": null,
+      "passes": 6,
+      "peak_p95": 0,
+      "repeats": 1,
+      "steps_median": 4.0,
+      "system_hash_by_task": {
+        "bh-format-duration": [
+          "2c08720cf669"
+        ],
+        "rt-checkout-bulk": [
+          "68814fd4750f"
+        ],
+        "session-fix-humanize-only": [
+          "aac675e64afc"
+        ],
+        "session-fix-ttl-units": [
+          "55d1f8f4f554"
+        ],
+        "slug-dedup-clean-rule": [
+          "55d035ca3dba"
+        ],
+        "taxed-fix-eu-vat": [
+          "21aa85e7eaa5"
+        ]
+      },
+      "tasks": [
+        "bh-format-duration",
+        "rt-checkout-bulk",
+        "session-fix-humanize-only",
+        "session-fix-ttl-units",
+        "slug-dedup-clean-rule",
+        "taxed-fix-eu-vat"
+      ],
+      "turn_total": 33
+    },
+    "on": {
+      "argv": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+        "--tag",
+        "bugfix",
+        "--engine",
+        "fake",
+        "--repeats",
+        "1",
+        "--budget-tokens",
+        "10000000",
+        "--out",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\b3-ab\\fake-on"
+      ],
+      "argv_common": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+        "--tag",
+        "bugfix",
+        "--engine",
+        "fake",
+        "--repeats",
+        "1",
+        "--budget-tokens",
+        "10000000"
+      ],
+      "arm_flags": [],
+      "batch": {
+        "aborted_batch": false,
+        "context_peak_p95": 0,
+        "cost_est_total": null,
+        "denial_rate": 0.0,
+        "engine": [
+          "fake"
+        ],
+        "failure_mode_dist": {
+          "self_confirm": 1
+        },
+        "pass_at_1": 1.0,
+        "pass_at_1_raw": "6/6",
+        "pass_at_k": 1.0,
+        "pass_at_k_raw": "6/6",
+        "repeated_call_rate": 0.0,
+        "repeats": 1,
+        "runs": 6,
+        "stalled_group_rate": 0.0,
+        "steps_to_success_median": 4.0,
+        "success_rate_ci": [
+          0.6097,
+          1.0
+        ],
+        "tasks": 6,
+        "tokens_per_success": 0,
+        "tokens_total": 0,
+        "tool_error_rate": 0.0,
+        "tool_executed": 39,
+        "verdicts": {
+          "error": 0,
+          "fail": 0,
+          "pass": 6
+        },
+        "wall_time_p50_ms": 2035,
+        "wall_time_p95_ms": 4879,
+        "wasted_output_ratio": 0.0
+      },
+      "engine": "fake",
+      "exit_code": 0,
+      "first_est_by_task": {
+        "bh-format-duration": 1973,
+        "rt-checkout-bulk": 1966,
+        "session-fix-humanize-only": 1831,
+        "session-fix-ttl-units": 1817,
+        "slug-dedup-clean-rule": 1824,
+        "taxed-fix-eu-vat": 1884
+      },
+      "llm_calls": 33,
+      "map_events": 14,
+      "map_last": {
+        "chars": 1170,
+        "est_tokens": 334,
+        "focus": [
+          "pricing/cart.py",
+          "pricing/config.py"
+        ],
+        "from_cache": 4,
+        "kind": "repo_map",
+        "listed": 6,
+        "modules_found": 6,
+        "modules_parsed": 2,
+        "note": "解析 2 · 复用缓存 4 · 不可解析 0",
+        "omitted": 0,
+        "parent_span_id": "c2b1be292b394197",
+        "reasons": [
+          {
+            "file": "pricing/config.py",
+            "listed": true,
+            "reasons": [
+              "最近读/改的就是它",
+              "被 2 个模块 import"
+            ],
+            "score": 74
+          },
+          {
+            "file": "pricing/cart.py",
+            "listed": true,
+            "reasons": [
+              "最近读/改的就是它",
+              "被 1 个模块 import"
+            ],
+            "score": 66
+          },
+          {
+            "file": "pricing/__init__.py",
+            "listed": true,
+            "reasons": [
+              "与最近读/改同目录",
+              "被 2 个模块 import",
+              "包入口"
+            ],
+            "score": 64
+          },
+          {
+            "file": "conftest.py",
+            "listed": true,
+            "reasons": [],
+            "score": 0
+          },
+          {
+            "file": "tests/test_pricing.py",
+            "listed": true,
+            "reasons": [],
+            "score": -2
+          },
+          {
+            "file": "tests/test_readme.py",
+            "listed": true,
+            "reasons": [],
+            "score": -2
+          }
+        ],
+        "rebuilt": true,
+        "schema_version": "2.0",
+        "seq": 18,
+        "session": "52bd5c581623",
+        "span_id": "29d58258f17e41d5",
+        "token_cap": 1500,
+        "trace_id": "7d1e93626e9542ff82343721977f986b",
+        "ts": 1790071540.465,
+        "turn": 3,
+        "unparsable": 0
+      },
+      "passes": 6,
+      "peak_p95": 0,
+      "repeats": 1,
+      "steps_median": 4.0,
+      "system_hash_by_task": {
+        "bh-format-duration": [
+          "d9448786be2a"
+        ],
+        "rt-checkout-bulk": [
+          "311dd897eb87"
+        ],
+        "session-fix-humanize-only": [
+          "33258a5e460d"
+        ],
+        "session-fix-ttl-units": [
+          "4f4f8a8cc3bc"
+        ],
+        "slug-dedup-clean-rule": [
+          "623d1b6e5720"
+        ],
+        "taxed-fix-eu-vat": [
+          "fcdb85fca4d1"
+        ]
+      },
+      "tasks": [
+        "bh-format-duration",
+        "rt-checkout-bulk",
+        "session-fix-humanize-only",
+        "session-fix-ttl-units",
+        "slug-dedup-clean-rule",
+        "taxed-fix-eu-vat"
+      ],
+      "turn_total": 33
+    }
+  },
+  "live": {
+    "off": {
+      "argv": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+        "--tag",
+        "bugfix",
+        "--engine",
+        "live",
+        "--repeats",
+        "3",
+        "--budget-tokens",
+        "1300000",
+        "--out",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\b3-ab\\live-off",
+        "--no-repo-map"
+      ],
+      "argv_common": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+        "--tag",
+        "bugfix",
+        "--engine",
+        "live",
+        "--repeats",
+        "3",
+        "--budget-tokens",
+        "1300000"
+      ],
+      "arm_flags": [
+        "--no-repo-map"
+      ],
+      "batch": {
+        "aborted_batch": false,
+        "context_peak_p95": 7711,
+        "cost_est_total": null,
+        "denial_rate": 0.0,
+        "engine": [
+          "live"
+        ],
+        "failure_mode_dist": {
+          "budget_exhausted": 1
+        },
+        "pass_at_1": 0.6667,
+        "pass_at_1_raw": "4/6",
+        "pass_at_k": 0.8333,
+        "pass_at_k_raw": "5/6",
+        "repeated_call_rate": 0.0,
+        "repeats": 3,
+        "runs": 18,
+        "stalled_group_rate": 0.0,
+        "steps_to_success_median": 6.0,
+        "success_rate_ci": [
+          0.5479,
+          0.91
+        ],
+        "tasks": 6,
+        "tokens_per_success": 46410,
+        "tokens_total": 649744,
+        "tool_error_rate": 0.0431,
+        "tool_executed": 209,
+        "verdicts": {
+          "error": 0,
+          "fail": 4,
+          "pass": 14
+        },
+        "wall_time_p50_ms": 25870,
+        "wall_time_p95_ms": 80049,
+        "wasted_output_ratio": 0.0
+      },
+      "engine": "live",
+      "exit_code": 1,
+      "first_est_by_task": {
+        "bh-format-duration": 1594,
+        "rt-checkout-bulk": 1559,
+        "session-fix-humanize-only": 1588,
+        "session-fix-ttl-units": 1574,
+        "slug-dedup-clean-rule": 1588,
+        "taxed-fix-eu-vat": 1573
+      },
+      "llm_calls": 128,
+      "map_events": 0,
+      "map_last": null,
+      "passes": 14,
+      "peak_p95": 7711,
+      "repeats": 3,
+      "rows": [
+        {
+          "broken": [],
+          "error": "",
+          "peak": 4626,
+          "repeat": 0,
+          "task_id": "bh-format-duration",
+          "termination": "completed",
+          "tokens": 28818,
+          "turns": 7,
+          "verdict": "fail"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 7002,
+          "repeat": 0,
+          "task_id": "rt-checkout-bulk",
+          "termination": "completed",
+          "tokens": 28743,
+          "turns": 5,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 4593,
+          "repeat": 0,
+          "task_id": "session-fix-humanize-only",
+          "termination": "completed",
+          "tokens": 23663,
+          "turns": 6,
+          "verdict": "pass"
+        },
+        {
+          "broken": [
+            "tests/test_format.py::test_humanize_exact_minute_keeps_the_seconds"
+          ],
+          "error": "",
+          "peak": 8388,
+          "repeat": 0,
+          "task_id": "session-fix-ttl-units",
+          "termination": "max_turns",
+          "tokens": 99440,
+          "turns": 16,
+          "verdict": "fail"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5942,
+          "repeat": 0,
+          "task_id": "slug-dedup-clean-rule",
+          "termination": "completed",
+          "tokens": 25649,
+          "turns": 5,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5317,
+          "repeat": 0,
+          "task_id": "taxed-fix-eu-vat",
+          "termination": "completed",
+          "tokens": 26610,
+          "turns": 6,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5367,
+          "repeat": 1,
+          "task_id": "bh-format-duration",
+          "termination": "completed",
+          "tokens": 37258,
+          "turns": 8,
+          "verdict": "fail"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 7592,
+          "repeat": 1,
+          "task_id": "rt-checkout-bulk",
+          "termination": "completed",
+          "tokens": 54734,
+          "turns": 9,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5007,
+          "repeat": 1,
+          "task_id": "session-fix-humanize-only",
+          "termination": "completed",
+          "tokens": 25566,
+          "turns": 6,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5779,
+          "repeat": 1,
+          "task_id": "session-fix-ttl-units",
+          "termination": "completed",
+          "tokens": 28855,
+          "turns": 6,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 6330,
+          "repeat": 1,
+          "task_id": "slug-dedup-clean-rule",
+          "termination": "completed",
+          "tokens": 47492,
+          "turns": 9,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 6276,
+          "repeat": 1,
+          "task_id": "taxed-fix-eu-vat",
+          "termination": "completed",
+          "tokens": 28917,
+          "turns": 6,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5021,
+          "repeat": 2,
+          "task_id": "bh-format-duration",
+          "termination": "completed",
+          "tokens": 22058,
+          "turns": 5,
+          "verdict": "fail"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 6515,
+          "repeat": 2,
+          "task_id": "rt-checkout-bulk",
+          "termination": "completed",
+          "tokens": 22617,
+          "turns": 4,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5259,
+          "repeat": 2,
+          "task_id": "session-fix-humanize-only",
+          "termination": "completed",
+          "tokens": 35027,
+          "turns": 8,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 6431,
+          "repeat": 2,
+          "task_id": "session-fix-ttl-units",
+          "termination": "completed",
+          "tokens": 48288,
+          "turns": 9,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5977,
+          "repeat": 2,
+          "task_id": "slug-dedup-clean-rule",
+          "termination": "completed",
+          "tokens": 32803,
+          "turns": 7,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 7417,
+          "repeat": 2,
+          "task_id": "taxed-fix-eu-vat",
+          "termination": "completed",
+          "tokens": 33206,
+          "turns": 6,
+          "verdict": "pass"
+        }
+      ],
+      "steps_median": 6.0,
+      "system_hash_by_task": {
+        "bh-format-duration": [
+          "241feec01097",
+          "2e8aa02c7779",
+          "71801211c72b"
+        ],
+        "rt-checkout-bulk": [
+          "306e28dfe68f",
+          "42cd56452147",
+          "64f3b95dba62"
+        ],
+        "session-fix-humanize-only": [
+          "3f344144ee4f",
+          "795c4efe108b",
+          "c34daa6fcd3c"
+        ],
+        "session-fix-ttl-units": [
+          "311f2d19bcaa",
+          "651b7fcca3e6",
+          "be8dfc732b78"
+        ],
+        "slug-dedup-clean-rule": [
+          "299b8acb748c",
+          "b25716eb9fcf",
+          "c498d1d39581"
+        ],
+        "taxed-fix-eu-vat": [
+          "228fc0a1fca7",
+          "2e88b22efbc1",
+          "e684ea78681b"
+        ]
+      },
+      "tasks": [
+        "bh-format-duration",
+        "rt-checkout-bulk",
+        "session-fix-humanize-only",
+        "session-fix-ttl-units",
+        "slug-dedup-clean-rule",
+        "taxed-fix-eu-vat"
+      ],
+      "turn_total": 128
+    },
+    "on": {
+      "argv": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+        "--tag",
+        "bugfix",
+        "--engine",
+        "live",
+        "--repeats",
+        "3",
+        "--budget-tokens",
+        "1300000",
+        "--out",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\b3-ab\\live-on"
+      ],
+      "argv_common": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+        "--tag",
+        "bugfix",
+        "--engine",
+        "live",
+        "--repeats",
+        "3",
+        "--budget-tokens",
+        "1300000"
+      ],
+      "arm_flags": [],
+      "batch": {
+        "aborted_batch": false,
+        "context_peak_p95": 8129,
+        "cost_est_total": null,
+        "denial_rate": 0.0,
+        "engine": [
+          "live"
+        ],
+        "failure_mode_dist": {},
+        "pass_at_1": 0.6667,
+        "pass_at_1_raw": "4/6",
+        "pass_at_k": 0.8333,
+        "pass_at_k_raw": "5/6",
+        "repeated_call_rate": 0.0055,
+        "repeats": 3,
+        "runs": 18,
+        "stalled_group_rate": 0.0,
+        "steps_to_success_median": 6,
+        "success_rate_ci": [
+          0.4913,
+          0.875
+        ],
+        "tasks": 6,
+        "tokens_per_success": 46982,
+        "tokens_total": 610767,
+        "tool_error_rate": 0.0221,
+        "tool_executed": 181,
+        "verdicts": {
+          "error": 0,
+          "fail": 5,
+          "pass": 13
+        },
+        "wall_time_p50_ms": 26956,
+        "wall_time_p95_ms": 55687,
+        "wasted_output_ratio": 0.0
+      },
+      "engine": "live",
+      "exit_code": 1,
+      "first_est_by_task": {
+        "bh-format-duration": 1972,
+        "rt-checkout-bulk": 1965,
+        "session-fix-humanize-only": 1830,
+        "session-fix-ttl-units": 1816,
+        "slug-dedup-clean-rule": 1823,
+        "taxed-fix-eu-vat": 1883
+      },
+      "llm_calls": 114,
+      "map_events": 51,
+      "map_last": {
+        "chars": 1203,
+        "est_tokens": 343,
+        "focus": [
+          "pricing/config.py",
+          "pricing/cart.py",
+          "pricing/__init__.py",
+          "tests/test_pricing.py",
+          "tests/test_readme.py",
+          "README.md"
+        ],
+        "from_cache": 5,
+        "kind": "repo_map",
+        "listed": 6,
+        "modules_found": 6,
+        "modules_parsed": 1,
+        "note": "解析 1 · 复用缓存 5 · 不可解析 0",
+        "omitted": 0,
+        "parent_span_id": "3ebdf94520f14167",
+        "reasons": [
+          {
+            "file": "pricing/__init__.py",
+            "listed": true,
+            "reasons": [
+              "最近读/改的就是它",
+              "被 2 个模块 import",
+              "包入口"
+            ],
+            "score": 84
+          },
+          {
+            "file": "pricing/config.py",
+            "listed": true,
+            "reasons": [
+              "最近读/改的就是它",
+              "被 2 个模块 import"
+            ],
+            "score": 74
+          },
+          {
+            "file": "pricing/cart.py",
+            "listed": true,
+            "reasons": [
+              "最近读/改的就是它",
+              "被 1 个模块 import"
+            ],
+            "score": 66
+          },
+          {
+            "file": "tests/test_pricing.py",
+            "listed": true,
+            "reasons": [
+              "最近读/改的就是它"
+            ],
+            "score": 58
+          },
+          {
+            "file": "tests/test_readme.py",
+            "listed": true,
+            "reasons": [
+              "最近读/改的就是它"
+            ],
+            "score": 58
+          },
+          {
+            "file": "conftest.py",
+            "listed": true,
+            "reasons": [
+              "与最近读/改同目录"
+            ],
+            "score": 40
+          }
+        ],
+        "rebuilt": true,
+        "schema_version": "2.0",
+        "seq": 48,
+        "session": "33c7b14bc8c3",
+        "span_id": "1b3338a0a7614b94",
+        "token_cap": 1500,
+        "trace_id": "624671fda68846fc9ad34507df90e10f",
+        "ts": 1790072720.336,
+        "turn": 8,
+        "unparsable": 0
+      },
+      "passes": 13,
+      "peak_p95": 8129,
+      "repeats": 3,
+      "rows": [
+        {
+          "broken": [],
+          "error": "",
+          "peak": 4621,
+          "repeat": 0,
+          "task_id": "bh-format-duration",
+          "termination": "completed",
+          "tokens": 17340,
+          "turns": 4,
+          "verdict": "fail"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5814,
+          "repeat": 0,
+          "task_id": "rt-checkout-bulk",
+          "termination": "completed",
+          "tokens": 20840,
+          "turns": 4,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 4479,
+          "repeat": 0,
+          "task_id": "session-fix-humanize-only",
+          "termination": "completed",
+          "tokens": 16281,
+          "turns": 4,
+          "verdict": "pass"
+        },
+        {
+          "broken": [
+            "tests/test_format.py::test_humanize_exact_minute_keeps_the_seconds"
+          ],
+          "error": "",
+          "peak": 7561,
+          "repeat": 0,
+          "task_id": "session-fix-ttl-units",
+          "termination": "llm_failure",
+          "tokens": 74909,
+          "turns": 14,
+          "verdict": "fail"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 7051,
+          "repeat": 0,
+          "task_id": "slug-dedup-clean-rule",
+          "termination": "completed",
+          "tokens": 33319,
+          "turns": 6,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 6559,
+          "repeat": 0,
+          "task_id": "taxed-fix-eu-vat",
+          "termination": "completed",
+          "tokens": 37469,
+          "turns": 7,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5258,
+          "repeat": 1,
+          "task_id": "bh-format-duration",
+          "termination": "completed",
+          "tokens": 28155,
+          "turns": 6,
+          "verdict": "fail"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 6513,
+          "repeat": 1,
+          "task_id": "rt-checkout-bulk",
+          "termination": "completed",
+          "tokens": 22991,
+          "turns": 4,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 4645,
+          "repeat": 1,
+          "task_id": "session-fix-humanize-only",
+          "termination": "completed",
+          "tokens": 16681,
+          "turns": 4,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 7383,
+          "repeat": 1,
+          "task_id": "session-fix-ttl-units",
+          "termination": "completed",
+          "tokens": 54143,
+          "turns": 9,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 7978,
+          "repeat": 1,
+          "task_id": "slug-dedup-clean-rule",
+          "termination": "completed",
+          "tokens": 39723,
+          "turns": 7,
+          "verdict": "fail"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 6795,
+          "repeat": 1,
+          "task_id": "taxed-fix-eu-vat",
+          "termination": "completed",
+          "tokens": 46173,
+          "turns": 8,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5097,
+          "repeat": 2,
+          "task_id": "bh-format-duration",
+          "termination": "completed",
+          "tokens": 18696,
+          "turns": 4,
+          "verdict": "fail"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 8988,
+          "repeat": 2,
+          "task_id": "rt-checkout-bulk",
+          "termination": "completed",
+          "tokens": 43485,
+          "turns": 6,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 4489,
+          "repeat": 2,
+          "task_id": "session-fix-humanize-only",
+          "termination": "completed",
+          "tokens": 16338,
+          "turns": 4,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 6154,
+          "repeat": 2,
+          "task_id": "session-fix-ttl-units",
+          "termination": "completed",
+          "tokens": 37884,
+          "turns": 7,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 5332,
+          "repeat": 2,
+          "task_id": "slug-dedup-clean-rule",
+          "termination": "completed",
+          "tokens": 33502,
+          "turns": 7,
+          "verdict": "pass"
+        },
+        {
+          "broken": [],
+          "error": "",
+          "peak": 7106,
+          "repeat": 2,
+          "task_id": "taxed-fix-eu-vat",
+          "termination": "completed",
+          "tokens": 52838,
+          "turns": 9,
+          "verdict": "pass"
+        }
+      ],
+      "steps_median": 6,
+      "system_hash_by_task": {
+        "bh-format-duration": [
+          "6142b9c74486",
+          "9f142460b337",
+          "e834b6568565"
+        ],
+        "rt-checkout-bulk": [
+          "1085f830555b",
+          "591464782f94",
+          "5c87ede4a4b0"
+        ],
+        "session-fix-humanize-only": [
+          "770077fe4553",
+          "93549915c865",
+          "ef8b21f29d3f"
+        ],
+        "session-fix-ttl-units": [
+          "3638c5d94228",
+          "83ef3559d9fa",
+          "ebcccfb9c640"
+        ],
+        "slug-dedup-clean-rule": [
+          "1a6f32216560",
+          "460ee49591f0",
+          "5b7830b17668"
+        ],
+        "taxed-fix-eu-vat": [
+          "b9657f15ccb8",
+          "d6ffd89549ad",
+          "e706f2db934c"
+        ]
+      },
+      "tasks": [
+        "bh-format-duration",
+        "rt-checkout-bulk",
+        "session-fix-humanize-only",
+        "session-fix-ttl-units",
+        "slug-dedup-clean-rule",
+        "taxed-fix-eu-vat"
+      ],
+      "turn_total": 114
+    },
+    "paired_by_task": {
+      "bh-format-duration": {
+        "off_passes": 0,
+        "off_peak_mean": 5005,
+        "off_steps_median": null,
+        "on_passes": 0,
+        "on_peak_mean": 4992,
+        "on_steps_median": null
+      },
+      "rt-checkout-bulk": {
+        "off_passes": 3,
+        "off_peak_mean": 7036,
+        "off_steps_median": 5,
+        "on_passes": 3,
+        "on_peak_mean": 7105,
+        "on_steps_median": 4
+      },
+      "session-fix-humanize-only": {
+        "off_passes": 3,
+        "off_peak_mean": 4953,
+        "off_steps_median": 6,
+        "on_passes": 3,
+        "on_peak_mean": 4538,
+        "on_steps_median": 4
+      },
+      "session-fix-ttl-units": {
+        "off_passes": 2,
+        "off_peak_mean": 6866,
+        "off_steps_median": 7.5,
+        "on_passes": 2,
+        "on_peak_mean": 7033,
+        "on_steps_median": 8.0
+      },
+      "slug-dedup-clean-rule": {
+        "off_passes": 3,
+        "off_peak_mean": 6083,
+        "off_steps_median": 7,
+        "on_passes": 2,
+        "on_peak_mean": 6787,
+        "on_steps_median": 6.5
+      },
+      "taxed-fix-eu-vat": {
+        "off_passes": 3,
+        "off_peak_mean": 6337,
+        "off_steps_median": 6,
+        "on_passes": 3,
+        "on_peak_mean": 6820,
+        "on_steps_median": 8
+      }
+    }
+  },
+  "map_cost_by_task": {
+    "bh-format-duration": {
+      "delta_chars": 1336,
+      "listed": 11,
+      "map_chars": 3525,
+      "map_est_tokens": 420,
+      "omitted": 0,
+      "py_files": 11,
+      "token_cap": 1500,
+      "tree_chars": 2189
+    },
+    "rt-checkout-bulk": {
+      "delta_chars": 1377,
+      "listed": 7,
+      "map_chars": 3546,
+      "map_est_tokens": 427,
+      "omitted": 0,
+      "py_files": 7,
+      "token_cap": 1500,
+      "tree_chars": 2169
+    },
+    "session-fix-humanize-only": {
+      "delta_chars": 805,
+      "listed": 6,
+      "map_chars": 2964,
+      "map_est_tokens": 260,
+      "omitted": 0,
+      "py_files": 6,
+      "token_cap": 1500,
+      "tree_chars": 2159
+    },
+    "session-fix-ttl-units": {
+      "delta_chars": 805,
+      "listed": 6,
+      "map_chars": 2964,
+      "map_est_tokens": 260,
+      "omitted": 0,
+      "py_files": 6,
+      "token_cap": 1500,
+      "tree_chars": 2159
+    },
+    "slug-dedup-clean-rule": {
+      "delta_chars": 783,
+      "listed": 6,
+      "map_chars": 2919,
+      "map_est_tokens": 249,
+      "omitted": 0,
+      "py_files": 6,
+      "token_cap": 1500,
+      "tree_chars": 2136
+    },
+    "taxed-fix-eu-vat": {
+      "delta_chars": 1037,
+      "listed": 6,
+      "map_chars": 3189,
+      "map_est_tokens": 325,
+      "omitted": 0,
+      "py_files": 6,
+      "token_cap": 1500,
+      "tree_chars": 2152
+    }
+  },
+  "mechanism_pass": true,
+  "notes": [
+    "两臂只差 --no-repo-map 一个开关；fake 臂的 verdict 由剧本决定，与地图无关，所以它只能用来核机制，不能用来答 B3。",
+    "map_cost_by_task 是跑 live 之前先量下的净增字符：B3 第二条判据（p95 ≤+15%）的分母是整段对话峰值，工具结果会摊薄这份固定开销，预测涨幅应小于 delta_chars 对 system 的占比。",
+    "中位数与 p95 由 eval/metrics.summarize_batch 计算，与 mcc eval 报表同源；steps_to_success 只统计通过的 run，因此另设一条防幸存者偏差的判据。",
+    "有效样本比题数小：bh-format-duration 两臂 3 次全灭，它对中位数的贡献是 0，所以'轮数没降'实际是在 5 题 × 3 次上算的。on 臂还比 off 臂少一次通过（防幸存者那条因此也判红）—— 这不是'地图帮了倒忙'的证据（n=18 的一次翻转在 McNemar 上远不到显著），而是'没有任何下降可报'。要断定地图有害，得单独设计一次反向假设检验。",
+    "§6.2 的三条时间线不进 B3 的通过判定（§4 没写它们），但不达标的会出现在 amendments 里，线本身不改成能过的数。",
+    "时间采样必须在空载机器上跑：同一份冷建代码，空载的三次独立采样分别是 557 / 602 / 712ms（每次都取 3~7 个样本的中位数），而带外负载时是 829ms（同时在跑 477 项测试）与 1,381ms（批次刚起跳）。前三次是实现的数字，后两次是机器的数字 —— 线只有 800ms，一次污染就足够把它判红。本文件的 budget_lines 取的是空载样本。",
+    "两臂按 off→on 的顺序整批跑，不是逐题交替：端点无状态，但 40 分钟里服务端的负载会变。这是这次配对的一个已知限度，写在这里而不是留到被问出来。"
+  ],
+  "pass": false,
+  "schema": 1,
+  "spec": "SPEC v2 §3.4 / §4 B3 / §7.1 行 11 · 验收线 B3",
+  "timings": {
+    "cache_entries_hit": 142,
+    "cold_build_best_ms": 556.822,
+    "cold_build_history_ms_across_invocations": [
+      556.822,
+      602.225,
+      711.8995,
+      829.0508,
+      941.6484,
+      968.5049,
+      1381.2829
+    ],
+    "cold_build_ms": {
+      "max": 1105.4198,
+      "median": 941.6484,
+      "min": 858.7392
+    },
+    "cold_build_ms_per_file": 6.631,
+    "cold_build_with_store_ms": 1121.312,
+    "disk_cache_hit_ms": 36.802,
+    "files_parsed": 0,
+    "files_scanned": 142,
+    "files_unparsable": 0,
+    "in_process_memo_build_ms": 7.802,
+    "line_implies_ms_per_file_at_2000": 0.4,
+    "map_chars_at_repo_scale": 5088,
+    "map_est_tokens_at_repo_scale": 1453,
+    "measured_on": "本仓库（src + demos + tests + eval/fixtures，已排除 .venv 与缓存目录）",
+    "memoized_render_ms": {
+      "max": 6.7586,
+      "median": 0.0003,
+      "min": 0.0003
+    },
+    "repeats": 5,
+    "spec_lines": {
+      "cache_hit_ms": 5,
+      "cold_build_under_2000_files_ms": 800,
+      "per_turn_overhead_ms": 50
+    }
+  }
+}

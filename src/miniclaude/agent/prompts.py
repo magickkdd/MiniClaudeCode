@@ -95,17 +95,22 @@ def build_system_prompt(
     python_executable: str | None = None,
     tool_names: Sequence[str] = (),
     workspace: Workspace | None = None,
+    map_provider: Callable[[], str] | None = None,
     max_map_lines: int = 30,
 ) -> str:
     """把运行期事实注入模板：工作目录、操作系统、Python、工具清单、仓库形状。
 
     返回值会被 Agent 每轮当作 system 发送（外加当前任务清单），所以这里
     只放**整个会话内稳定**的内容 —— 会变的东西放进来就是缓存杀手。
+
+    `map_provider` 是 SPEC v2 §3.4 的注入点：给定它就用它（符号地图，自己按仓库
+    指纹缓存），没给就退回那张 30 行的广度优先目录树。两条臂同时存在是 B3 的 A/B
+    要求的 —— "地图关"必须是一个真能跑的配置，不是把段落删掉。
     """
     ws = workspace or Workspace(project_root)
     sections: list[str] = [SYSTEM_PROMPT.strip(), _environment(ws, platform, model, python_executable)]
 
-    repo_map = render_repo_map(ws, max_lines=max_map_lines)
+    repo_map = map_provider() if map_provider is not None else render_repo_map(ws, max_lines=max_map_lines)
     if repo_map:
         sections.append(repo_map)
 
