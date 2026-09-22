@@ -1,0 +1,28 @@
+{
+  "id": "lc-rollup-api",
+  "instruction": "`ledger/` 下有 part_01 … part_08 八个模块，每个约 24k 字符、100 个公开函数。按 README 的约定，为**每一个**模块在 `reports/` 下写一个 `part_NN_summary.py`，逐字抄对该模块的 `AUDIT_TAG` 与全部公开函数的规范签名和 docstring 首行；再写 `tests/test_rollups.py` 用 ast 把汇总层与源文件比对，最后跑到全绿。别改 `ledger/` 与既有测试。",
+  "source": { "kind": "vendored", "path": "eval/fixtures/ledger" },
+  "pass_to_pass": [
+    "tests/test_ledger.py::test_part_01_audit_tag",
+    "tests/test_ledger.py::test_part_01_normalize_principal_000",
+    "tests/test_ledger.py::test_part_04_audit_tag",
+    "tests/test_ledger.py::test_part_08_audit_tag"
+  ],
+  "verify_cmd": "python -m pytest tests -q --no-header -p no:cacheprovider --confcutdir . --rootdir .",
+  "probe": "import ast\nfrom pathlib import Path\n\ndef pub(module):\n    tree = ast.parse(module.read_text(encoding='utf-8'))\n    rows = []\n    for node in tree.body:\n        if isinstance(node, ast.FunctionDef) and not node.name.startswith('_'):\n            doc = (ast.get_docstring(node) or '').splitlines()\n            rows.append((node.name, 'def ' + node.name + '(' + ast.unparse(node.args) + ')', doc[0].strip() if doc else ''))\n    return sorted(rows)\n\ndef tag(module):\n    for node in ast.parse(module.read_text(encoding='utf-8')).body:\n        if isinstance(node, ast.Assign) and getattr(node.targets[0], 'id', '') == 'AUDIT_TAG':\n            return node.value.value\n    raise AssertionError('源模块没有 AUDIT_TAG')\n\nsources = sorted(Path('ledger').glob('part_*.py'))\nassert len(sources) == 8, [str(s) for s in sources]\nimported = 0\nfor source in sources:\n    summary = Path('reports') / (source.stem + '_summary.py')\n    assert summary.is_file(), f'缺 {summary}'\n    ns = {}\n    exec(compile(ast.parse(summary.read_text(encoding='utf-8')), str(summary), 'exec'), ns)\n    assert sorted(tuple(r) for r in ns['API']) == pub(source), f'{summary.name} 的 API 与源文件不一致'\n    assert ns['SOURCE'] == source.as_posix(), ns['SOURCE']\n    assert ns['AUDIT_TAG'] == tag(source), f'{summary.name} 的 AUDIT_TAG 抄错了'\n    imported += len(ns['API'])\nassert imported >= 750, f'汇总了 {imported} 个函数，八个模块应有 800 个'\nassert Path('tests/test_rollups.py').is_file(), '没写汇总层的契约测试'\n",
+  "must_exist": [
+    "reports/part_01_summary.py",
+    "reports/part_08_summary.py",
+    "tests/test_rollups.py"
+  ],
+  "added_only": ["reports", "tests"],
+  "min_changed_files": 8,
+  "expected_termination": "completed",
+  "tags": ["long-context", "memory", "compact", "api-index", "b2"],
+  "max_turns": 26,
+  "token_ceiling": 400000,
+  "difficulty": 3,
+  "supports_live": true,
+  "fake": { "driver": "long-report", "args": { "modules": 8 } },
+  "notes": "SPEC v2 §3.3 B2 的载体题：一个**必然**超 `TOKEN_BUDGET=32000` 的任务。194,356 字符的源文件 + 八份各约 14k 字符的汇总写出，两头都在涨；`write_file` 的 content 进的是 assistant 消息，L1 省略工具输出碰不到它，所以阶梯必须走到 L2 —— B2 第三句判据（摘要里要能 grep 到已改文件名）就挂在这里。fixture 由 `scripts/make_ledger_fixture.py` 确定性生成。probe 不信模型写的测试：它自己 ast 解析源文件重算全部签名，逐字比。`token_ceiling` 给到 400k 不是放松要求，这题在 live 上就该花这么多（fake 引擎不下单，用它做 A/B）。A/B 两臂只差 `--no-compact` 一个开关：开着阶梯 19 轮判据全绿、峰值 est 26,278、14 次压缩（L1 8 块 + L2 28 块）0 次因配对放弃；关掉阶梯第 5 轮 31,287 est 越过 `0.95 × 32,000 = 30,400` 的 L3 拒载线，死在 context_overflow —— 这条归因写在 `context_refuse` 记录里（`scripts/b2_compact_ab.py` → `eval/results/b2-compact-ab.json`）。`--context-hard-limit` 不属于 A/B，它只服务 tight 负向对照（12k 预算 + 15k 熔断线：窗口真不够时阶梯照样救不回）。"
+}

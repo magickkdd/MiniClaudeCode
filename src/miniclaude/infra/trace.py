@@ -214,6 +214,7 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     tools = [r for r in records if r.get("kind") == "tool_call"]
     turns = [r for r in records if r.get("kind") == "turn_start"]
     responses = [r for r in records if r.get("kind") == "llm_response"]
+    compactions = [r for r in records if r.get("kind") == "context_compact"]
     usage = sum(
         (r.get("usage", {}) or {}).get("prompt", 0) + (r.get("usage", {}) or {}).get("completion", 0)
         for r in responses
@@ -237,8 +238,14 @@ def summarize_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         "repeated_calls": end.get("repeated_calls", 0),
         "stalled_groups": end.get("stalled_groups", 0),
         "denied_actions": end.get("denied_actions", 0),
-        "tokens": usage,
+        # L2 摘要那次请求不发 `llm_response`（它没有工具、也不占轮次），只把开销记在
+        # `context_compact.summary_tokens` 上。这里必须加回来，否则 `mcc eval` 的
+        # tokens_spent 会系统性低报，而压缩恰恰是全循环最贵的一次单点开销。
+        "tokens": usage + sum(int(r.get("summary_tokens") or 0) for r in compactions),
         "context_peak_tokens": end.get("context_peak_tokens", 0),
+        "context_compactions": int(end.get("context_compactions", 0)),
+        "context_elided_blocks": int(end.get("context_elided_blocks", 0)),
+        "context_summary_tokens": int(end.get("context_summary_tokens", 0)),
         "wall_ms": end.get("wall_ms", 0),
         "cost_est": end.get("cost_est"),
         "failure_modes": list(end.get("failure_modes", []) or []),

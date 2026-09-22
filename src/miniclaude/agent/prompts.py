@@ -21,6 +21,7 @@ from collections import deque
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from miniclaude.messages import Message, TextBlock, ToolUseBlock
 from miniclaude.tools.workspace import Workspace
 
 SYSTEM_PROMPT = """\
@@ -176,3 +177,73 @@ def render_repo_map(ws: Workspace, *, max_lines: int = 30, header: str | None = 
     if pending or hidden:
         tree.append(f"  …（只显示 {room} 条，另有 {hidden} 项未列出；请用 find_files / search_text 继续探查）")
     return "# 仓库形状\n" + "\n".join(tree)
+
+
+# ---------------------------------------------------------------- 上下文压缩
+
+COMPACT_SYSTEM = """\
+你是会话历史的压缩器。你的输出会**替换**掉一段已经完成的对话历史，
+后面每一步都要靠它决定做什么，所以只能写"后续工作必须依赖的事实"。
+
+不要写：寒暄、对你的称呼、你打算怎么做这件事的空话、模板里没有内容的字段的占位。
+必须写全这五项，缺一项就说明缺哪项：
+目标 / 已确认事实 / 未验证的假设 / 最后一次测试结论 / 被否决的路径
+
+"被否决的路径"最重要：漏了它，下一步会重走同一条死路。
+只输出正文字段，不要复述这段说明。"""
+
+_SUMMARY_FIELDS = ("目标", "已确认事实", "未验证的假设", "最后一次测试结论", "被否决的路径")
+
+
+def render_transcript(
+    messages: Sequence[Message], *, per_block_chars: int = 1200, max_chars: int = 120_000
+) -> str:
+    """把要压掉的那批消息渲染成给摘要器看的纯文本。
+
+    截断是有意的：摘要器看到的是"每段观察的开头"，不是全文 —— 全量重发的话
+    L2 自己就会变成新的上下文瓶颈。上限按字符数算，约 3.4 万 token，
+    离 `CONTEXT_HARD_LIMIT` 还有足够余量。
+    """
+    lines: list[str] = []
+    total = 0
+    for message in messages:
+        for block in message.content:
+            if isinstance(block, TextBlock):
+                piece = f"[{message.role.value}] {block.text}"
+            elif isinstance(block, ToolUseBlock):
+                piece = f"[{message.role.value}] 调用 {block.name} {_args_brief(block)}"
+            else:
+                tag = "结果(失败)" if block.is_error else "结果"
+                piece = f"[{tag}] {block.content}"
+            if len(piece) > per_block_chars:
+                head = piece[: per_block_chars // 2]
+                tail = piece[-(per_block_chars // 4) :]
+                piece = f"{head}\n…（省略 {len(piece) - len(head) - len(tail)} chars）\n{tail}"
+            total += len(piece) + 1
+            if total > max_chars:
+                lines.append("…（更早的内容因摘要请求自身的预算被截断）")
+                return "\n".join(lines)
+            lines.append(piece)
+    return "\n".join(lines)
+
+
+def build_summary_request(messages: Sequence[Message], goal: str) -> str:
+    """摘要请求：模板 + 待压历史。
+
+    字段清单写在这里、`_local_digest()` 写在 context.py 里，是有意的分工：
+    文件名这类**代码确定知道**的事不劳模型复述，模型只写它才有的判断。
+    """
+    fields = "\n".join(f"{name}：" for name in _SUMMARY_FIELDS)
+    return (
+        "下面这个任务的对话历史太长了，需要压成一段后续工作要依赖的纪要。\n\n"
+        f"用户原始任务：\n{goal}\n\n"
+        "请按下面的字段逐条写，没有内容的字段写「无」：\n"
+        f"{fields}\n\n"
+        "待压缩的历史（越早的越在前面）：\n"
+        f"{render_transcript(messages)}"
+    )
+
+
+def _args_brief(block: ToolUseBlock) -> str:
+    args = block.input if isinstance(block.input, dict) else {}
+    return ", ".join(f"{key}={str(value)[:60]}" for key, value in list(args.items())[:3])

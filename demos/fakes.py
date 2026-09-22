@@ -13,6 +13,7 @@ tool_use_id"时能直接写出期望值。
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from miniclaude.messages import (
@@ -74,6 +75,60 @@ class FakeLLM:
                 for block in message.results:
                     out.append(block.content)
         return out
+
+
+class FakeSummarizer:
+    """压缩阶梯 L2 专用的确定性摘要客户端 —— 必须有独立队列。
+
+    摘要请求走的是同一个 `self.llm`。拿主剧本的 `FakeLLM` 去服务它，每次 L2 都会
+    **偷吃掉一条剧本条目**：B2 首跑就是因此少写了 `part_06` 的汇总模块，题目判 fail，
+    病根却在评测框架。真实端点按请求内容回答，没这个毛病 —— 所以这个坑只在 fake
+    引擎下存在，也必须只在 fake 引擎下堵住，别把补丁漏到主剧本那条路上。
+
+    它只做抽取式纪要（把请求里出现的文件名抄进正文），不假装会总结：B2 要验的是
+    "压缩请求携带了这些文件名、摘要替换历史之后它们还在上下文里"，这两件事一个
+    正则就够证明；真要验模型的总结质量，那是 live 臂的活。
+    """
+
+    def __init__(
+        self,
+        *,
+        prompt_tokens: int = 1_800,
+        completion_tokens: int = 150,
+        always_empty: bool = False,
+    ) -> None:
+        """`always_empty=True` 冒充"付了费却什么也没说"（真实端点被输出上限截断的形状）。
+
+        负向对照要用它：只说好话的假摘要器证不了"文件名来自摘要文本、开销照记"这两件事。
+        """
+        self.calls: list[dict[str, Any]] = []
+        self.usage = Usage(prompt_tokens, completion_tokens)
+        self.always_empty = always_empty
+
+    @property
+    def call_count(self) -> int:
+        return len(self.calls)
+
+    def create(
+        self,
+        *,
+        system: str,
+        messages: list[Message],
+        tools: list[ToolSpec],
+    ) -> LLMResponse:
+        self.calls.append({"system": system, "messages": list(messages), "tools": list(tools)})
+        transcript = messages[-1].text() if messages else ""
+        names = sorted(set(re.findall(r"[\w./-]+\.(?:py|json|md|txt)", transcript)))
+        if self.always_empty:
+            text = ""
+        else:
+            named = "、".join(names) or "（请求里没出现文件名）"
+            text = (
+                "目标：把被压掉的历史写成还能接着干活的纪要。\n"
+                f"已确认事实：这段历史涉及 {len(names)} 个文件：{named}。\n"
+                "未验证的假设：无\n最后一次测试结论：无\n被否决的路径：无"
+            )
+        return scripted_final_text(text, usage=self.usage)
 
 
 def scripted_tool_calls(

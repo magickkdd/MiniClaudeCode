@@ -301,6 +301,49 @@ def test_denied_action_is_reported_allowed_is_silent() -> None:
     assert "已拦下 write_file" in recorder.text() and "超出工作区" in recorder.text()
 
 
+def test_compaction_is_visible_and_says_which_tier_paid() -> None:
+    """Agent 改写了自己要发出去的历史，这件事不能静默。
+
+    L1 免费、L2 要花一次调用，两行的措辞必须让用户看得出花的钱 ——
+    否则"这次怎么变慢了"只能靠猜。
+    """
+    from miniclaude.agent.loop import AgentEvent, EventKind
+
+    renderer, recorder = make_renderer()
+    renderer.handle(
+        AgentEvent(
+            EventKind.CONTEXT_COMPACT,
+            {"level": "elide", "before_est": 24_000, "after_est": 19_000, "elided_blocks": 7,
+             "dropped_blocks": 0, "pairing_ok": True, "summary_tokens": 0, "note": ""},
+        )
+    )
+    line = recorder.text()
+    assert "[elide]" in line and "省略 7 块旧工具输出" in line
+    assert "24,000 → 19,000" in line, "省了多少要能一眼看出，只报比例等于没报"
+
+    renderer, recorder = make_renderer()
+    renderer.handle(
+        AgentEvent(
+            EventKind.CONTEXT_COMPACT,
+            {"level": "summarize", "before_est": 28_000, "after_est": 15_000, "elided_blocks": 0,
+             "dropped_blocks": 6, "pairing_ok": True, "summary_tokens": 640, "note": ""},
+        )
+    )
+    assert "摘要 6 段历史" in recorder.text() and "自身花 640" in recorder.text()
+
+    renderer, recorder = make_renderer()
+    renderer.handle(
+        AgentEvent(
+            EventKind.CONTEXT_COMPACT,
+            {"level": "summarize", "before_est": 28_000, "after_est": 28_000, "elided_blocks": 0,
+             "dropped_blocks": 0, "pairing_ok": False, "summary_tokens": 0,
+             "note": "压缩后配对破损，已放弃本次压缩：#2 结果 c1 从未回填结果"},
+        )
+    )
+    text = recorder.text()
+    assert "压缩被放弃" in text and "从未回填结果" in text, "放弃压缩是排查现场，必须响"
+
+
 def test_final_text_does_not_repeat_what_was_already_printed() -> None:
     renderer, recorder = make_renderer()
     renderer.assistant_text("任务完成，改了 2 个文件。")

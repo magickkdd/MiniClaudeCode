@@ -39,6 +39,9 @@ class AgentState:
     turn: int = 0
     usage: Usage = field(default_factory=Usage)
     context_peak_tokens: int = 0
+    context_compactions: int = 0     # 阶梯真的改了历史的次数（放弃的那些不算）
+    context_elided_blocks: int = 0   # L1：被换成省略标记的工具结果块
+    context_summary_tokens: int = 0  # L2：摘要请求自己烧的 token，不记就等于说压缩免费
     tool_calls: int = 0
     tool_errors: int = 0
     repeated_calls: int = 0        # 逐调用：与前一次同名同参（SPEC v2 §3.1）
@@ -51,12 +54,21 @@ class AgentState:
         self.usage.prompt_tokens += usage.prompt_tokens
         self.usage.completion_tokens += usage.completion_tokens
 
+    def record_compaction(self, *, elided: int, summary_tokens: int) -> None:
+        """一次**被采用**的压缩。放弃的那些不走这里 —— 否则计数又在替代码表功。"""
+        self.context_compactions += 1
+        self.context_elided_blocks += elided
+        self.context_summary_tokens += summary_tokens
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "turn": self.turn,
             "usage": {"prompt": self.usage.prompt_tokens, "completion": self.usage.completion_tokens,
                       "total": self.usage.total},
             "context_peak_tokens": self.context_peak_tokens,
+            "context_compactions": self.context_compactions,
+            "context_elided_blocks": self.context_elided_blocks,
+            "context_summary_tokens": self.context_summary_tokens,
             "tool_calls": self.tool_calls,
             "tool_errors": self.tool_errors,
             "repeated_calls": self.repeated_calls,

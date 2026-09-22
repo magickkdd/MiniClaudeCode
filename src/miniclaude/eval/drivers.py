@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 from typing import Callable, Sequence
@@ -130,6 +131,128 @@ def over_budget(task: TaskInstance, workdir: Path) -> list[LLMResponse]:
     return turns
 
 
+def _public_api(source: Path) -> list[tuple[str, str, str]]:
+    """按 README 约定的规范形态取出模块的公开 API：(名字, 签名, docstring 首行)。
+
+    规范签名 = `f"def {name}({ast.unparse(node.args)})"` —— 剧本与判据共用这一个定义，
+    否则"逐字一致"会变成两边各写一套归一化规则、比出来全是假红。
+    """
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    out: list[tuple[str, str, str]] = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
+            continue
+        doc = (ast.get_docstring(node) or "").splitlines()
+        out.append((node.name, f"def {node.name}({ast.unparse(node.args)})", doc[0].strip() if doc else ""))
+    out.sort()
+    return out
+
+
+def _rollup_source(workdir: Path, relative: str) -> str:
+    """按 README 的格式生成一份 `reports/part_NN_summary.py`。"""
+    source = workdir / relative
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    tag = next(
+        (node.value.value for node in tree.body
+         if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "AUDIT_TAG"),
+        "",
+    )
+    rows = "\n".join(
+        f"    ({name!r}, {signature!r}, {doc!r})," for name, signature, doc in _public_api(source)
+    )
+    return (
+        f'"""Summary of {relative}."""\n\n'
+        f'SOURCE = "{relative}"\n'
+        f'AUDIT_TAG = "{tag}"\n'
+        "API = [\n"
+        f"{rows}\n"
+        "]\n"
+    )
+
+
+ROLLUP_CONTRACT_TEST = '''"""Contract test for the rollup layer: every summary must match its source module."""
+
+import ast
+from pathlib import Path
+
+LEDGER = Path("ledger")
+REPORTS = Path("reports")
+
+
+def _public(module: Path):
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    rows = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
+            doc = (ast.get_docstring(node) or "").splitlines()
+            rows.append((node.name, f"def {node.name}({ast.unparse(node.args)})",
+                         doc[0].strip() if doc else ""))
+    return sorted(rows)
+
+
+def _summary(module: Path):
+    namespace: dict = {}
+    exec(compile(ast.parse(module.read_text(encoding="utf-8")), str(module), "exec"), namespace)
+    return sorted((tuple(row) for row in namespace["API"])), namespace
+
+
+def _tag(module: Path) -> str:
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "AUDIT_TAG":
+            return node.value.value
+    raise AssertionError(f"{module} 里没有 AUDIT_TAG")
+
+
+def test_every_part_has_a_summary():
+    sources = sorted(LEDGER.glob("part_*.py"))
+    assert sources, "ledger/ 里没有 part 模块，题目本身坏了"
+    for source in sources:
+        assert (REPORTS / f"{source.stem}_summary.py").is_file(), f"缺 {source.stem} 的汇总模块"
+
+
+def test_summaries_match_their_sources_exactly():
+    for source in sorted(LEDGER.glob("part_*.py")):
+        summary = REPORTS / f"{source.stem}_summary.py"
+        if not summary.is_file():
+            continue
+        rows, namespace = _summary(summary)
+        assert rows == _public(source), f"{summary.name} 的 API 与源文件不一致"
+        assert namespace["SOURCE"] == str(source).replace("\\\\", "/"), namespace["SOURCE"]
+        assert namespace["AUDIT_TAG"] == _tag(source), f"{summary.name} 的 AUDIT_TAG 抄错了"
+
+
+def test_rollup_layer_covers_the_whole_surface():
+    total = sum(len(_public(source)) for source in sorted(LEDGER.glob("part_*.py")))
+    done = 0
+    for summary in sorted(REPORTS.glob("part_*_summary.py")):
+        rows, _ = _summary(summary)
+        done += len(rows)
+    assert total and done == total, f"汇总了 {done} 个函数，源里一共 {total} 个"
+'''
+
+
+def long_report(task: TaskInstance, workdir: Path) -> list[LLMResponse]:
+    """一轮读一个模块、一轮写一份汇总 —— B2（SPEC v2 §3.3）的载体剧本。
+
+    这个剧本的存在理由不是"演一个长任务"，而是把阶梯的两层**各逼到一次**：
+    读进来的大块工具输出让 L1 有活干；`write_file` 的 `content` 参数在 **assistant
+    消息**里，L1 碰不到，所以只能靠 L2 整组摘要 —— 于是"摘要里能不能 grep 到已改
+    文件名"这条判据才真的被测到。八个模块约 19 万字符，32k 预算下必然越线。
+    """
+    args = task.fake.args
+    count = int(args.get("modules", 8))
+    sources = [f"ledger/part_{index:02d}.py" for index in range(1, count + 1)]
+    turns: list[LLMResponse] = [scripted_tool_calls([("read_file", {"path": path})]) for path in sources]
+    for path in sources:
+        rollup = f"reports/{Path(path).stem}_summary.py"
+        turns.append(scripted_tool_calls([("write_file", {"path": rollup, "content": _rollup_source(workdir, path)})]))
+    turns.append(scripted_tool_calls([("write_file", {"path": "tests/test_rollups.py", "content": ROLLUP_CONTRACT_TEST})]))
+    turns.append(scripted_tool_calls([("run_tests", {})]))
+    turns.append(scripted_final_text(args.get("text", "八份汇总模块与契约测试都写好了，测试全绿。")))
+    return turns
+
+
 def from_demo(script_name: str) -> Driver:
     """复用 `demos/fake_scripts.py` 里已经调好的剧本。"""
 
@@ -154,6 +277,7 @@ DRIVERS: dict[str, Driver] = {
     "tamper": tamper,
     "repeat-stall": repeat_stall,
     "over-budget": over_budget,
+    "long-report": long_report,
     "demo:codegen": from_demo("codegen_script"),
     "demo:bug-hunt": from_demo("bug_hunt_script"),
     "demo:red-tests": from_demo("red_tests_script"),

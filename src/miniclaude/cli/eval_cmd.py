@@ -42,6 +42,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baselines-dir", type=Path, default=None, help="基线目录，默认 <仓库根>/eval/baselines")
     parser.add_argument("--save-baseline", action="store_true", help="跑完把本批成绩写成 <engine>-<题集哈希>.json")
     parser.add_argument("--force", action="store_true", help="即使基线不可比也照跑（默认拒绝，避免白花时间与额度）")
+    # 阶梯 A/B 用：B2 要求"关掉阶梯会失败、开着能通过"，两臂只能差这一个开关。
+    parser.add_argument("--no-compact", action="store_true", help="关闭上下文压缩阶梯（阶梯对照的对照组）")
+    parser.add_argument(
+        "--context-budget",
+        type=int,
+        default=None,
+        help="覆盖 TOKEN_BUDGET（阶梯的触发刻度）；不想等真长任务时用它把两臂拉开",
+    )
+    parser.add_argument(
+        "--context-hard-limit",
+        type=int,
+        default=None,
+        help="覆盖 CONTEXT_HARD_LIMIT（端点拒收前的止损线）：对照臂要靠它把'不压缩就撞墙'跑出来",
+    )
     parser.add_argument("--lint", action="store_true", help="只做考题自检（判据可能为真的题）后退出")
     parser.add_argument("--list", dest="as_list", action="store_true", help="列出任务后退出")
     parser.add_argument(
@@ -106,6 +120,15 @@ def run(argv: Sequence[str], config: Config | None = None) -> int:
             )
             return 2
 
+    tuned = bool(args.no_compact or args.context_budget or args.context_hard_limit)
+    if tuned and args.save_baseline and not args.force:
+        print(
+            "已拒绝：--no-compact / --context-budget / --context-hard-limit 改过阶梯，"
+            "这批不能当基线入库（确实要就加 --force）",
+            file=sys.stderr,
+        )
+        return 2
+
     runner = EvalRunner(
         tasks=selected,
         out=out,
@@ -117,6 +140,9 @@ def run(argv: Sequence[str], config: Config | None = None) -> int:
         on_line=print,
         config=live_config,
         baseline=baseline,
+        context_compact=False if args.no_compact else None,
+        context_budget=args.context_budget,
+        context_hard_limit=args.context_hard_limit,
     )
     scope = (
         f"{len(selected)} 题 × {repeats} 次"
@@ -124,6 +150,19 @@ def run(argv: Sequence[str], config: Config | None = None) -> int:
         else f"{len(selected)}/{len(tasks)} 题 × {repeats} 次（子集）"
     )
     print(f"评测开始：{scope} · engine={engine} · 输出 {out}")
+    if tuned:
+        # 阶梯两臂只能差一个开关，所以被拧过的批次必须自报家门（SPEC v2 §3.3 B2）。
+        if args.no_compact:
+            ladder = "已关闭"
+        else:
+            ladder = (
+                f"开，预算 {args.context_budget:,} tokens"
+                if args.context_budget
+                else "开，默认预算"
+            )
+        if args.context_hard_limit:
+            ladder += f" · 熔断线 {args.context_hard_limit:,} tokens"
+        print(f"上下文阶梯：{ladder} —— 这批的分数不与默认配置批混读")
     if baseline_path is not None:
         print(f"基线：{baseline_path}")
     report = runner.run()

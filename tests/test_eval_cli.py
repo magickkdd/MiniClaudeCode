@@ -304,3 +304,39 @@ def test_a_negative_task_that_is_caught_still_counts_as_trouble(repo: Path, caps
     assert code == 1
     assert "这些题按判据没做对：toy-claim" in out
     assert "必须被抓坏的题" not in out
+
+
+# ---------------------------------------------------------------- 阶梯 A/B 的两臂
+
+
+def test_the_tuned_batch_announces_which_knob_it_moved(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """`--no-compact` 跑出来的分数不是默认配置的分数，终端必须自报家门。
+
+    两臂的差别只在这一个开关上；报表上看不出来，下一次读的人就会把它当成
+    "阶梯开着也没区别"的那一批 —— 而 B2 要的恰恰是这两批的对比。
+    """
+    write_task(repo, task_json())
+    code, out, _ = run_cli(repo, "--repeats", "1", "--no-compact", capsys=capsys)
+    assert code == 0
+    assert "上下文阶梯：已关闭" in out
+    code, out, _ = run_cli(repo, "--repeats", "1", "--no-resume", "--context-budget", "8000", capsys=capsys)
+    assert code == 0
+    assert "上下文阶梯：开，预算 8,000 tokens" in out
+
+
+def test_a_default_batch_stays_quiet_about_the_ladder(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    write_task(repo, task_json())
+    code, out, _ = run_cli(repo, "--repeats", "1", capsys=capsys)
+    assert code == 0
+    assert "上下文阶梯" not in out, "没拧过旋钮就别刷屏 —— 告警喊哑了等于没有"
+
+
+def test_a_tuned_batch_cannot_be_saved_as_the_baseline(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """基线是 B1 的那把尺子。拿关掉阶梯的一批去当尺子，之后每批都会被量错。"""
+    write_task(repo, task_json())
+    code, out, err = run_cli(repo, "--repeats", "1", "--no-compact", "--save-baseline", capsys=capsys)
+    assert code == 2
+    assert "不能当基线入库" in err
+    assert "评测开始" not in out, "拒绝要发生在花钱之前"
+    written = list((repo / "baselines").glob("*.json")) if (repo / "baselines").exists() else []
+    assert written == [], f"证据目录里不该出现被拧过阶梯的批次：{written}"

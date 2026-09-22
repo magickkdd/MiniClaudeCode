@@ -21,9 +21,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from miniclaude.agent.context import ContextManager
+from miniclaude.agent.context import HARD_FUSE_RATIO, ContextManager
 from miniclaude.agent.permissions import PermissionGate
 from miniclaude.agent.planner import TodoList
+from miniclaude.agent.prompts import COMPACT_SYSTEM, build_summary_request
 from miniclaude.agent.state import AgentResult, AgentState, TerminationReason
 from miniclaude.infra.failure import (
     CallFact,
@@ -35,7 +36,7 @@ from miniclaude.infra.failure import (
 from miniclaude.infra.trace import new_span_id, prompt_hash
 from miniclaude.llm.base import LLMClient
 from miniclaude.llm.openai_compat import LLMError
-from miniclaude.messages import Message, Role, StopReason, ToolResultBlock
+from miniclaude.messages import Message, Role, StopReason, ToolResultBlock, dedupe_tool_use_ids
 from miniclaude.tools.base import ToolResult
 from miniclaude.tools.registry import ToolRegistry
 
@@ -53,6 +54,7 @@ class EventKind(StrEnum):
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
     TODO_UPDATE = "todo_update"
+    CONTEXT_COMPACT = "context_compact"    # 压缩阶梯动手了
     WARNING = "warning"
     ERROR = "error"
     FINISHED = "finished"
@@ -86,14 +88,20 @@ class Agent:
         on_event: EventHandler | None = None,
         tracer: Any = None,
         price_per_mtokens: float = 0.0,
+        summarizer_llm: LLMClient | None = None,
     ) -> None:
         self.llm = llm
+        # L2 摘要默认与主循环同一个客户端；eval 的 fake 引擎必须换成独立队列的假摘要器，
+        # 否则每次摘要都会从主剧本里吃掉一条响应 —— 见 demos/fakes.py::FakeSummarizer。
+        self.summarizer_llm = summarizer_llm or llm
         self.registry = registry
         self.gate = gate
         self.base_prompt = system_prompt
         self.max_turns = max_turns
         self.max_total_tokens = max_total_tokens
-        self.context = context or ContextManager(budget=120_000)
+        # 默认值只有一处来源（config.DEFAULTS）。这里再拍一个数就会有两套预算 ——
+        # v1 就是这么把 120,000 同时写进 config.py 和这里的。
+        self.context = context or ContextManager()
         self.todos = todos or TodoList()
         self.on_event = on_event
         self.tracer = tracer
@@ -132,6 +140,92 @@ class Agent:
         """本轮实际会发出去的 system 文本，供 /context 和测试读取。"""
         return self._system()
 
+    def _compact_if_needed(
+        self, system: str, specs: list[Any], est_tokens: int, sent_chars: int
+    ) -> tuple[int, int]:
+        """跑压缩阶梯，返回**压缩之后**的估算值。改历史只在配对完好时才发生。
+
+        每层都单独写一条 `context_compact`：报表要能回答"L2 试没试过、省了多少、
+        这层自己花了多少 token"，这些只能按层记。
+        """
+        if self.context.level_for_pressure(self.context.pressure_from_chars(sent_chars)) is None:
+            return est_tokens, sent_chars
+
+        reports = self.context.run_ladder(
+            system=system,
+            tools=specs,
+            messages=self.messages,
+            summarizer=self._summarize_history,
+        )
+        for report in reports:
+            payload = report.as_trace()
+            payload["turn"] = self.state.turn
+            self._trace(
+                "context_compact",
+                span_id=new_span_id(),
+                parent_span_id=self._turn_span,
+                **payload,
+            )
+            self._emit(EventKind.CONTEXT_COMPACT, **payload)
+            if not report.pairing_ok:
+                continue
+            if report.changed:
+                self.messages = report.messages
+                self.state.record_compaction(
+                    elided=report.elided_blocks, summary_tokens=report.summary_tokens
+                )
+        sent_chars = self.context.wire_chars(system=system, tools=specs, messages=self.messages)
+        return self.context.estimate_from_chars(sent_chars), sent_chars
+
+    def _trace_context_stop(
+        self, line: str, est_tokens: int, sent_chars: int, threshold_tokens: int
+    ) -> None:
+        """把"这一轮的请求为什么根本没发出去"写进 trace。
+
+        UI 上止损只是一行红字，但离线侧（`mcc trace --why-failed`、B2 的 A/B 证据）必须
+        能只读 trace 就复现判断：越的是哪条线、阈值多少、当时估到多少、阶梯开着没有。
+        没有这条记录时，一条被预算杀掉的会话在 trace 里就只是"第 4 轮突然没了下文"，
+        而"关阶梯必败"这句话将无法与"某个开关碰巧拧小了"区分开。
+        """
+        self._trace(
+            "context_refuse",
+            span_id=new_span_id(),
+            parent_span_id=self._turn_span,
+            turn=self.state.turn,
+            line=line,
+            threshold_tokens=threshold_tokens,
+            est_tokens=est_tokens,
+            budget_tokens=self.context.budget,
+            hard_limit_tokens=self.context.hard_limit,
+            pressure=round(self.context.pressure_from_chars(sent_chars), 3),
+            ladder_enabled=self.context.enabled,
+        )
+
+    def _summarize_history(self, dropped: list[Message], goal: str) -> tuple[str, int]:
+        """L2 的实现细节：发一次不带工具的独立请求要摘要。返回 (文本, 自身开销 token)。
+
+        这次调用必须记账（SPEC v2 §3.3）：不记的话压缩在报表上就是免费的，
+        而它恰恰是全循环里最贵的一次单点开销。
+        """
+        request = [Message.user_text(build_summary_request(dropped, goal))]
+        try:
+            response = self.summarizer_llm.create(system=COMPACT_SYSTEM, messages=request, tools=[])
+        except LLMError as exc:
+            # 摘要失败不该让整个会话跟着死：交回空文本，context 层会用本地统计兜底，
+            # 那条路径至少还带着"已改动文件"，比丢历史或中止都便宜。
+            self._last_error = f"摘要请求失败：{exc}"
+            self._trace(
+                "error",
+                span_id=new_span_id(),
+                parent_span_id=self._turn_span,
+                turn=self.state.turn,
+                layer="compact",
+                message=str(exc)[:500],
+            )
+            return "", 0
+        self.state.record_usage(response.usage)
+        return response.text(), response.usage.total
+
     def run(self, user_input: str, *, task_id: str | None = None) -> AgentResult:
         """处理一条用户请求，返回最终答复与全部计数。
 
@@ -169,20 +263,52 @@ class Agent:
                 return self._finish(TerminationReason.MAX_TURNS)
 
             self.state.turn += 1
+            # 轮 span 先开：压缩事件属于这一轮，挂在上一轮的 span 下就查不到是谁压的。
+            self._turn_span = new_span_id()
             system = self._system()
             specs = self.registry.specs()
             sent_chars = self.context.wire_chars(system=system, tools=specs, messages=self.messages)
             est_tokens = self.context.estimate_from_chars(sent_chars)
-            pressure = self.context.pressure_from_chars(sent_chars)
             self._est_tokens.append(est_tokens)
 
+            # 先看熔断，再看阶梯：请求已经大到必然被拒时，压缩那点功夫不值得花。
+            if self.context.over_hard_limit(est_tokens):
+                self._emit(
+                    EventKind.ERROR,
+                    message=(
+                        f"上下文估算 {est_tokens:,} tokens 已越过硬熔断线 "
+                        f"{int(HARD_FUSE_RATIO * self.context.hard_limit):,}（CONTEXT_HARD_LIMIT 的 90%），"
+                        "主动停止以避免请求被端点拒绝。请缩小任务范围或换更小的读取粒度。"
+                    ),
+                )
+                self._trace_context_stop(
+                    "hard_fuse", est_tokens, sent_chars,
+                    int(HARD_FUSE_RATIO * self.context.hard_limit),
+                )
+                return self._finish(TerminationReason.CONTEXT_OVERFLOW)
+
+            est_tokens, sent_chars = self._compact_if_needed(system, specs, est_tokens, sent_chars)
+            pressure = self.context.pressure_from_chars(sent_chars)
+
             if pressure >= self.context.stop_pressure:
-                self._emit(EventKind.ERROR, message="上下文已接近预算上限，主动停止以避免请求被端点拒绝。")
+                self._emit(
+                    EventKind.ERROR,
+                    message=(
+                        f"压缩之后上下文仍占预算的 {pressure:.0%}（估算 {est_tokens:,} / "
+                        f"{self.context.budget:,} tokens），继续跑必然被拒。已主动停止。"
+                    ),
+                )
+                self._trace_context_stop(
+                    "l3_refuse", est_tokens, sent_chars,
+                    int(self.context.stop_pressure * self.context.budget),
+                )
                 return self._finish(TerminationReason.CONTEXT_OVERFLOW)
             if pressure >= self.context.warn_pressure:
-                self._emit(EventKind.WARNING, message="上下文使用率超过 80%，建议尽快收尾或缩小任务范围。")
+                self._emit(
+                    EventKind.WARNING,
+                    message=f"上下文使用率 {pressure:.0%}，压缩阶梯还能撑一会儿，但建议尽快收尾。",
+                )
 
-            self._turn_span = new_span_id()
             self._trace(
                 "turn_start",
                 span_id=self._turn_span,
@@ -222,7 +348,9 @@ class Agent:
             self.context.calibrate(response.usage.prompt_tokens, sent_chars)
             self.state.record_usage(response.usage)
             self.state.context_peak_tokens = max(self.state.context_peak_tokens, response.usage.prompt_tokens)
-            self.messages.append(response.as_message())
+            message = response.as_message()
+            repairs = dedupe_tool_use_ids(message, self.messages)
+            self.messages.append(message)
             self._trace(
                 "llm_response",
                 span_id=self._turn_span,
@@ -231,13 +359,14 @@ class Agent:
                 stop_reason=response.stop_reason.value,
                 blocks=[type(block).__name__ for block in response.blocks],
                 usage={"prompt": response.usage.prompt_tokens, "completion": response.usage.completion_tokens},
+                id_repairs=len(repairs),
                 latency=round(time.perf_counter() - requested, 3),
             )
 
             if text := response.text().strip():
                 self._emit(EventKind.ASSISTANT_TEXT, text=text)
 
-            calls = response.tool_uses
+            calls = message.tool_uses
             if not calls:
                 if not text:
                     empty_replies += 1

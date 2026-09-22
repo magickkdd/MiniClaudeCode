@@ -1,0 +1,232 @@
+{
+  "arms": {
+    "off": {
+      "abandoned_by_pairing": 0,
+      "argv": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks-b2",
+        "--out",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\b2-ab\\off",
+        "--engine",
+        "fake",
+        "--repeats",
+        "1",
+        "--no-compact"
+      ],
+      "broken_checks": [
+        "行为探测通过（不依赖模型自述）",
+        "要求的文件都在、禁止的文件没出现",
+        "任务正常收尾（completed）",
+        "改动落在代码里（≥8 个文件）"
+      ],
+      "compactions": 0,
+      "context_refusals": [
+        {
+          "est_tokens": 31287,
+          "ladder_enabled": false,
+          "line": "l3_refuse",
+          "threshold_tokens": 30400,
+          "turn": 5
+        }
+      ],
+      "dropped_blocks": 0,
+      "elide_attempts": 0,
+      "elided_blocks": 0,
+      "exit_code": 1,
+      "id_repairs": 3,
+      "pairing_400_errors": 0,
+      "peak_est_tokens": 23871,
+      "saved_est_tokens": 0,
+      "summarize_attempts": 0,
+      "summary_files_kept": [],
+      "summary_tokens": 0,
+      "termination": "context_overflow",
+      "tokens": 0,
+      "turns": 4,
+      "verdict": "fail"
+    },
+    "on": {
+      "abandoned_by_pairing": 0,
+      "argv": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks-b2",
+        "--out",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\b2-ab\\on",
+        "--engine",
+        "fake",
+        "--repeats",
+        "1"
+      ],
+      "broken_checks": [],
+      "compactions": 14,
+      "context_refusals": [],
+      "dropped_blocks": 28,
+      "elide_attempts": 12,
+      "elided_blocks": 8,
+      "exit_code": 0,
+      "id_repairs": 15,
+      "pairing_400_errors": 0,
+      "peak_est_tokens": 26278,
+      "saved_est_tokens": 95586,
+      "summarize_attempts": 2,
+      "summary_files_kept": [
+        "reports/part_01_summary.py",
+        "reports/part_02_summary.py",
+        "reports/part_03_summary.py",
+        "reports/part_04_summary.py",
+        "reports/part_05_summary.py",
+        "reports/part_06_summary.py"
+      ],
+      "summary_tokens": 3900,
+      "termination": "completed",
+      "tokens": 3900,
+      "turns": 19,
+      "verdict": "pass"
+    },
+    "tight": {
+      "abandoned_by_pairing": 0,
+      "argv": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks-b2",
+        "--out",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\b2-ab\\tight",
+        "--engine",
+        "fake",
+        "--repeats",
+        "1",
+        "--context-budget",
+        "12000",
+        "--context-hard-limit",
+        "15000"
+      ],
+      "broken_checks": [
+        "行为探测通过（不依赖模型自述）",
+        "要求的文件都在、禁止的文件没出现",
+        "任务正常收尾（completed）",
+        "改动落在代码里（≥8 个文件）"
+      ],
+      "compactions": 1,
+      "context_refusals": [
+        {
+          "est_tokens": 16470,
+          "ladder_enabled": true,
+          "line": "hard_fuse",
+          "threshold_tokens": 13500,
+          "turn": 3
+        }
+      ],
+      "dropped_blocks": 0,
+      "elide_attempts": 1,
+      "elided_blocks": 0,
+      "exit_code": 1,
+      "id_repairs": 1,
+      "pairing_400_errors": 0,
+      "peak_est_tokens": 9058,
+      "saved_est_tokens": 0,
+      "summarize_attempts": 0,
+      "summary_files_kept": [],
+      "summary_tokens": 0,
+      "termination": "context_overflow",
+      "tokens": 0,
+      "turns": 2,
+      "verdict": "fail"
+    }
+  },
+  "clauses": [
+    {
+      "claim": "关掉阶梯：同一题、同一剧本必须失败，且失败原因是上下文",
+      "detail": "verdict=fail termination=context_overflow 第 4 轮",
+      "id": "off_arm_fails_on_budget",
+      "ok": true
+    },
+    {
+      "claim": "对照组的死因在 trace 里自带归因：越的是 L3 拒载线、阶梯当时没开",
+      "detail": "off 臂 context_refuse [{'line': 'l3_refuse', 'threshold_tokens': 30400, 'est_tokens': 31287, 'ladder_enabled': False, 'turn': 5}]",
+      "id": "off_arm_death_attributed",
+      "ok": true
+    },
+    {
+      "claim": "开启阶梯：默认配置下这题判据全绿",
+      "detail": "verdict=pass 第 19 轮 · 未过判据 无",
+      "id": "on_arm_passes",
+      "ok": true
+    },
+    {
+      "claim": "对照组里阶梯一次都没动过手（否则两臂比的不是阶梯）",
+      "detail": "off 臂 context_compact 记录 0 条",
+      "id": "ladder_really_off_in_control",
+      "ok": true
+    },
+    {
+      "claim": "L1 与 L2 各被真正触发过（只到 L1 就等于没测到摘要）",
+      "detail": "L1 省略 8 块 / L2 摘要 28 块（2 次），共省 95586 est tokens",
+      "id": "both_tiers_fired",
+      "ok": true
+    },
+    {
+      "claim": "压缩后 0 次因配对破损被放弃（结构层面的那句话）",
+      "detail": "on 臂 14 次压缩，放弃 0 次",
+      "id": "zero_pairing_abandonments",
+      "ok": true
+    },
+    {
+      "claim": "没有一次请求因配对破损被端点拒收",
+      "detail": "fake 臂只能证明结构合法；端点侧的 400 由 live 臂负责（未跑 live 时本条只覆盖 fake）",
+      "id": "zero_pairing_400",
+      "ok": true
+    },
+    {
+      "claim": "摘要里 grep 得到本轮已改文件名",
+      "detail": "摘要清单里留下 6 个路径，其中汇总模块 6/8：['reports/part_01_summary.py', 'reports/part_02_summary.py', 'reports/part_03_summary.py', 'reports/part_04_summary.py', 'reports/part_05_summary.py', 'reports/part_06_summary.py']",
+      "id": "summary_carries_changed_files",
+      "ok": true
+    },
+    {
+      "claim": "L2 的开销进了报表（压缩不是免费的）",
+      "detail": "summary_tokens=3900 · 全批 tokens=3900（剧本 usage 恒为 0）",
+      "id": "l2_cost_is_charged",
+      "ok": true
+    },
+    {
+      "claim": "负向对照：窗口真不够时阶梯也救不回来，它不是万能药",
+      "detail": "tight 臂 verdict=fail termination=context_overflow，阶梯试了 1 次",
+      "id": "tight_window_still_dies",
+      "ok": true
+    },
+    {
+      "claim": "端点撞车的 tool_use id 在入历史前被就地改名（B2 首跑的死因）",
+      "detail": "on 臂改了 15 个 id，改完之后没有一次压缩因配对被放弃",
+      "id": "id_repairs_reached_the_wire",
+      "ok": true
+    },
+    {
+      "claim": "SPEC 那句『8 项压缩测试』全绿",
+      "detail": "tests/test_compact.py + tests/test_pairing.py 收集到 51 项，整批退出码 0",
+      "id": "compression_tests_ge_8",
+      "ok": true
+    }
+  ],
+  "compression_tests": {
+    "count": 51,
+    "exit_code": 0,
+    "output_tail": [
+      "51 passed in 0.20s"
+    ]
+  },
+  "engine": "fake",
+  "fixture": {
+    "generator": "scripts/make_ledger_fixture.py",
+    "path": "eval/fixtures/ledger",
+    "why": "8 模块 × 100 公开函数 ≈ 19.4 万字符，关阶梯必超预算、开阶梯必走到 L2"
+  },
+  "notes": [
+    "两臂只差 --no-compact 一个开关；tight 臂是负向对照，不参与 A/B 的因果结论。",
+    "off 臂的死因写在 context_refuse 里，不在 turn_start 的估算序列里：阶梯关掉后越线发生在那一轮工具结果回填之后，而 turn_start 每轮只采样一次，所以 trace 上最后一个 est 反而低于阈值（本臂实测 23,871 < 30,400）。只看 est 序列会把这判成'模型自己停了'。",
+    "id_repairs：FakeLLM 每轮都发 call_0，跨轮撞车会让 _guard_pairing 认为原始历史就非法、从而放弃每一次压缩 —— 阶梯因此整体空转。修在 loop 入历史之前（messages.dedupe_tool_use_ids）。",
+    "summary_files 来自代码算的本地改动清单，不押在模型是否照模板写字段上。"
+  ],
+  "pass": true,
+  "schema": 1,
+  "spec": "SPEC v2 §3.3 / §7.1 行 10 · 验收线 B2",
+  "task": "lc-rollup-api"
+}

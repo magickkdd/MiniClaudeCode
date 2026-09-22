@@ -46,8 +46,8 @@
 根因找到：切「天」那次 divmod 用的是每小时的秒数，90000 秒因此被切成 25 段。改成 SECONDS_PER_DAY。
 ✓ edit_file   duration/format.py  1ms
 现有测试最远只到 3599 秒，所以这个 bug 一直是哑的。补上跨天的用例。
-✓ write_file  tests/test_format_days.py  2ms
-✓ run_tests     1.1s
+✓ write_file  tests/test_format_days.py  1ms
+✓ run_tests     1.0s
 修好了，根因是单位换算用错常量：`duration/format.py` 里切「天」的那次 `divmod` 传的是 `SECONDS_PER_HOUR`（3600）而不是 `SECONDS_PER_DAY`（86400），于是 90000 秒变成 `25d0h0m0s`。
 
 - 改动 1 行：`duration/format.py`

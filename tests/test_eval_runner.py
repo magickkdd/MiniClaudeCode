@@ -349,3 +349,70 @@ def test_a_task_that_cannot_even_be_assembled_does_not_take_the_batch_down(repo:
     assert report.summary["verdicts"] == {"pass": 1, "fail": 0, "error": 1}
     bad = next(run for run in report.runs if run.task_id == "c-bad")
     assert "装配失败" in bad.error and "no-such-driver" in bad.error
+
+
+# ------------------------------------------------------------- 阶梯 A/B 的覆盖口
+
+
+def _first_task(repo: Path) -> Any:
+    write_task(repo, task_json())
+    return next(iter(TaskSet.load(repo / "eval" / "tasks")))
+
+
+def test_the_ladder_overrides_reach_the_per_task_config(repo: Path, tmp_path: Path) -> None:
+    """`--no-compact` / `--context-budget` 必须真的落到那份 Config 上。
+
+    阶梯对照的两臂只能差这个开关；如果覆盖只改了 CLI 的打印、没改到装配用的
+    config，那两臂跑的是同一个东西，B2 的结论就是空的。
+    """
+    task = _first_task(repo)
+    plain = runner_for(repo, tmp_path / "out").config_for(task, tmp_path / "w", tmp_path / "t.jsonl")
+    assert plain.context_compact is True, "默认必须开着，否则对照组无从对照"
+
+    tuned = runner_for(
+        repo, tmp_path / "out", context_compact=False, context_budget=8_000
+    ).config_for(task, tmp_path / "w", tmp_path / "t.jsonl")
+    assert tuned.context_compact is False
+    assert tuned.token_budget == 8_000
+    # 覆盖只准动阶梯：顺手把模型钥匙换成假的，live 批会以"网络错误"的样子失败。
+    assert tuned.api_key == plain.api_key and tuned.model == plain.model
+    assert tuned.project_root == tmp_path / "w" and tuned.max_turns == task.max_turns
+
+
+def test_a_context_budget_at_or_above_the_hard_limit_is_refused(repo: Path, tmp_path: Path) -> None:
+    """预算 ≥ 硬熔断线时，先撞熔断再谈压缩，整批都会是 CONTEXT_OVERFLOW。"""
+    task = _first_task(repo)
+    hard = runner_for(repo, tmp_path / "out").config_for(
+        task, tmp_path / "w", tmp_path / "t.jsonl"
+    ).context_hard_limit
+    runner = runner_for(repo, tmp_path / "out", context_budget=hard)
+    with pytest.raises(ValueError, match="CONTEXT_HARD_LIMIT"):
+        runner.config_for(task, tmp_path / "w", tmp_path / "t.jsonl")
+
+
+def test_the_fake_summary_client_quotes_only_the_files_it_was_handed() -> None:
+    """假摘要器只做抽取：请求里没出现的文件名，它一个也不该"记得"。
+
+    这条是 `summary_files` 的对照面 —— 那个字段记"压缩后真留下了哪些"，这里钉住
+    "假纪要里没有凭空调出来的东西"。B2 的 grep 判据两头都要成立才算数。
+    """
+    from fakes import FakeSummarizer
+    from miniclaude.messages import Message
+
+    summarizer = FakeSummarizer()
+    transcript = "读 ledger/part_01.py，然后写 reports/part_06_summary.py"
+    response = summarizer.create(  # type: ignore[call-arg]
+        system="只要纪要", messages=[Message.user_text(transcript)], tools=[]
+    )
+    text = response.text()
+    assert "reports/part_06_summary.py" in text
+    assert "ledger/part_99.py" not in text, "编造没见过的路径 —— 那正是我们不放 LLM 进判据的理由"
+    assert response.usage.total > 0, "L2 不免费：假摘要器也要报开销，否则报表那条线测不到"
+    assert summarizer.call_count == 1
+
+
+def test_a_non_positive_context_budget_is_refused_up_front(repo: Path, tmp_path: Path) -> None:
+    """0 会让阶梯整条失效（`budget <= 0` 即关闭），那是 --no-compact 的活，别用这条路。"""
+    _first_task(repo)
+    with pytest.raises(ValueError, match="context_budget"):
+        runner_for(repo, tmp_path / "out", context_budget=0)

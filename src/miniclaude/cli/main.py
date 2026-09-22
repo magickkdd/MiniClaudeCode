@@ -87,6 +87,7 @@ def build_session(
     renderer: Renderer | None = None,
     confirmer: Callable[[str, str], Answer] | None = None,
     llm: Any = None,
+    summarizer_llm: Any = None,
     use_rich: bool | None = None,
 ) -> Session:
     """装配依赖图：Config -> Workspace/Registry/Gate/Tracer/LLM -> Agent。"""
@@ -124,12 +125,17 @@ def build_session(
     )
     agent = Agent(
         llm=client,
+        summarizer_llm=summarizer_llm,
         registry=registry,
         gate=gate,
         system_prompt=system_prompt,
         max_turns=cfg.max_turns,
         max_total_tokens=cfg.max_total_tokens,
-        context=ContextManager(budget=cfg.token_budget),
+        context=ContextManager(
+            budget=cfg.token_budget,
+            hard_limit=cfg.context_hard_limit,
+            enabled=cfg.context_compact,
+        ),
         todos=todos,
         tracer=tracer,
         on_event=render.handle,
@@ -186,10 +192,17 @@ def handle_command(session: Session, raw: str) -> str:
         )
         snap = agent.context.snapshot()
         budget = max(agent.context.budget, 1)
+        ladder = (
+            f"已压缩 {snap['compactions']} 次：省略 {snap['elided_blocks']} 块工具输出、"
+            f"摘要 {snap['summaries']} 次（自身花 {snap['summary_tokens']:,} tokens）"
+            if snap["compactions"]
+            else "尚未触发压缩"
+        )
         return (
             f"  消息 {len(agent.messages)} 条 · 估算 {used:,} / 预算 {agent.context.budget:,} tokens"
-            f"（{used / budget * 100:.0f}%）\n"
+            f"（{used / budget * 100:.0f}%）· 硬熔断 {agent.context.hard_limit:,}\n"
             f"  系数 {snap['chars_per_token']} 字符/token · 端点上次实测 {snap['last_actual_prompt_tokens']:,} prompt tokens\n"
+            f"  压缩阶梯 {'开' if snap['enabled'] else '关'} · {ladder}\n"
             f"  累计 {agent.state.usage.total:,} / 上限 {agent.max_total_tokens:,} tokens · 轮数 {agent.state.turn}/{agent.max_turns}"
         )
     if name == "todos":

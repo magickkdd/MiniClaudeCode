@@ -23,7 +23,7 @@
 
 注意最后那句自我更正：**优先级 bug 是测试抓出来的，不是模型看出来的**。这就是 `run_tests` 作为判据而不是装饰的意义。
 
-当前状态：**382 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
+当前状态：**446 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2 的 fake 侧**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，12 条判据与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)，真实端点那 5 次尚未跑，所以这一条验收线只算完成一半。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
 
 ---
 
@@ -203,7 +203,9 @@ Ctrl-C 的语义是**放弃当前输入但保留历史**：中断不该毁掉已
 | `MAX_TOTAL_TOKENS` | 800000 | 累计 token 止损线 |
 | `BASH_TIMEOUT` | 60 | 单条命令秒级超时 |
 | `TOOL_OUTPUT_LIMIT` | 30000 | 工具输出回填上限（字符） |
-| `TOKEN_BUDGET` | 120000 | 上下文估算预算 |
+| `TOKEN_BUDGET` | 32000 | 上下文估算预算 —— **压缩阶梯挂这个**（v1 的 120000 已下调，理由见 §4.7） |
+| `CONTEXT_HARD_LIMIT` | 200000 | 只防一件事：请求被端点拒收。独立熔断 `est ≥ 0.9 ×` 它，与 `TOKEN_BUDGET` 必须严格更大的小于关系由 `config.py` 加载时校验 |
+| `CONTEXT_COMPACT` | 1 | 设 `0` 整个压缩阶梯不开（L3 拒载与硬熔断照旧）。评测里对应 `--no-compact` |
 | `LLM_REQUEST_TIMEOUT` | 120 | HTTP 超时 |
 | `TRACE_PATH` | 空 | 会话 JSONL 落盘位置 |
 
@@ -236,6 +238,32 @@ mcc eval --only bh-format-duration --repeats 5 --no-resume
 - **负样本按设计判红**。题集里 4 道带 `must-fail`（改断言作弊、猜路径、只读题瞎改、宣称成功却不测试），判红才算数；被判绿会触发"判据告警"并占退出码 1。`negative` 与 `must-fail` 不是一回事 —— 前者只说"这题模拟坏行为"，后者说"判据必须抓住它"。
 - **基线按题集哈希自动匹配**。改任何一道题的题面或 fixture，哈希就变，旧基线不再被拿来对比（默认拒绝开跑；`--force` 可强行跑，但报表照旧标"无法对比"）。
 - **`|Δ| < 12.5%` 一律写"分辨不出"**。显著性用 McNemar 精确二项而不是卡方近似：n=24 时一次翻转就是 4.2%，卡方在小样本上恰好把 p 算得偏小。
+
+### 4.7 上下文压缩阶梯（长任务为什么不炸）
+
+v1 的选择是"只观测、不干预"：超过 `TOKEN_BUDGET` 的 95% 直接 `context_overflow` 止损，因为压缩一旦删错一组 `tool_calls`/`tool` 配对，端点就回 400，排查成本比一次明确的"任务太大"更高。v2 把这把刀接上了，接法是两个旋钮 + 三级：
+
+| 层 | 触发（`pressure = est / TOKEN_BUDGET`） | 动作 | 额外 LLM 调用 |
+|---|---|---|---|
+| **L1 elide** | ≥ 0.70 | 把**已完成轮次**的工具输出换成一行 `[elided: read_file src/a.py 4213 chars — 需要时重新读取]`，压到 0.65 收手。消息数量不变，内容能从磁盘重读 | 0 |
+| **L2 summarize** | ≥ 0.85 | 一次独立请求把最老 60% 历史压成结构化纪要（7 个字段，含"已改动文件""被否决的路径"），整组替换 | 1 |
+| **L3 refuse** | ≥ 0.95 | 保持 v1 行为：停止并发出中文说明。**这条不可关**，它是最后的地基 | 0 |
+| 熔断 | `est ≥ 0.9 × CONTEXT_HARD_LIMIT` | 与阶梯无关的独立止损，防的是"请求被端点拒收" | 0 |
+
+三处值得单独说的实现细节：
+
+- **配对是硬不变式，判定只有一份**（`messages.pairing_problems` / `assert_pairing`）。每层压完先跑它，破损就**放弃这次压缩并照旧落一条 `context_compact{pairing_ok:false, note:"…配对破损…"}`** —— 静默放弃与"阶梯没生效"在报表上长一样，所以说明必须上线路（终端同样打印）。一层放弃后 `run_ladder` 直接 `break`：L1 已经证明这段历史压不得，再付 L2 那次调用买不来任何东西。
+- **`dedupe_tool_use_ids` 在消息入历史前改名**（`<原 id>~<位置>`，不用 uuid，否则 trace 与基线不再逐字节可比）。B2 首跑就是死在跨轮撞 `call_0` 上：撞车让判定函数认为**原始**历史就非法，于是每次压缩都被放弃，看起来像"压缩无效"。改了几个记在 `llm_response.id_repairs`。
+- **L2 的账必须记**。`context_compact.summary_tokens` 进报表的"压缩开销"一列，`mcc eval` 的 `tokens` 也把它加回来 —— 不记的话，全循环最贵的一次单点开销在报表上是免费的。
+
+```bash
+mcc eval --tasks eval/tasks-b2 --repeats 1                    # 实验组：默认阶梯
+mcc eval --tasks eval/tasks-b2 --repeats 1 --no-compact       # 对照组：阶梯一次都不动手
+mcc eval --tasks eval/tasks-b2 --repeats 1 --context-budget 12000 --context-hard-limit 15000   # 负向对照
+PYTHONPATH="src;demos" python -X utf8 scripts/b2_compact_ab.py # 三臂 + 12 条判据 → eval/results/b2-compact-ab.json
+```
+
+实测（`lc-rollup-api`：`ledger/` 八模块 194,356 字符，逐字抄签名再写汇总层）：关阶梯第 5 轮 `est=31,287` 越 `l3_refuse`（阈值 30,400）判 `context_overflow`；开阶梯 19 轮全绿、14 次压缩、0 次因配对放弃、0 个配对 400。这条死因不是靠人转述的 —— `context_refuse` 记录自带 `line / threshold_tokens / est_tokens / ladder_enabled`，因为 `turn_start` 每轮只在请求前采样一次，光看 est 序列会把"预算杀掉的会话"读成"模型自己停了"。
 
 
 ---
@@ -450,16 +478,19 @@ live 那次（`demos/traces/red-tests.live.jsonl`，6 轮 13 次调用）的路�
 ## 8. 测试
 
 ```bash
-python -m pytest -q                # 382 passed
+python -m pytest -q                # 446 passed
 python -m pytest tests/test_loop_with_fake_llm.py -q
 python -m pytest tests/test_eval_runner.py tests/test_eval_cli.py -q   # 评测层（不联网）
 python scripts/b4_label_check.py   # 失败模式标签的人工核对，退出码 0 才算过
+python scripts/b2_compact_ab.py    # B2 三臂 A/B + 12 条判据，退出码 0 才算过（--live 才花额度）
 mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 ```
 
 | 文件 | 覆盖 |
 |---|---|
-| `test_loop_with_fake_llm.py`（25） | 全量回填与顺序、多轮工具链、轮数/token 止损、上下文超预算、停滞与空响应重试、未知工具、参数畸形的 tool_call、路径逃逸、只读拦截、连续拒绝、自我调试直到转绿、事件与轨迹 |
+| `test_loop_with_fake_llm.py`（30） | 全量回填与顺序、多轮工具链、轮数/token 止损、上下文超预算、**止损记录自带归因（`context_refuse` 的 `line`/`ladder_enabled`）**、**摘要请求不吃主剧本队列**、**空摘要照样记账**、停滞与空响应重试、未知工具、参数畸形的 tool_call、路径逃逸、只读拦截、连续拒绝、自我调试直到转绿、事件与轨迹 |
+| `test_compact.py`（25） | 三级阶梯各自触发/不触发：L1 只动工具输出且消息数不变、压到目标线才收手、保护最近 N 轮、L2 整组删、`summary_files` 只报**真存活**的路径、配对破损时放弃并留中文说明、`run_ladder` 一层放弃后不再往上付钱 |
+| `test_pairing.py`（26） | 三条配对规则逐个方向钉死：并行一轮多调用、结果消息不许混文本、**跨轮撞 id**（`dedupe_tool_use_ids` 的确定性改名与"干净历史不许改对象"）、压缩/resume/子 agent 回填三条路径共用同一份判定 |
 | `test_tools.py`（43） | 每个工具的正常路径与失败形态：越界路径、目录当文件读、非法正则、无匹配、`old_string` 不唯一/不匹配、bash 超时、**非零退出算观测不算工具报错**、参数校验、多余参数丢弃、注册表去重 |
 | `test_failure_rules.py`（44） | 8 条失败模式规则各自的命中与**不命中**：真实形状逐条钉住（含"context_growth 在旧 schema 上彻底失明"这条已知盲区），并检查 `scripts/b4_label_check.py` 的 EXPECT 覆盖到盘上每一条 trace |
 | `test_cli.py`（29） | `build_session` 装配、密钥不进 trace 与提示词、REPL 分发与 EOF/Ctrl-C、渲染逐行语义（一行一次调用、标签取识别参数、被拒才打印）、一次性任务的退出码映射、确认器答复翻译 |
@@ -491,7 +522,7 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 ## 9. 已知局限（诚实清单）
 
 - **A1 要求"非本项目真实仓库"，这里用的是仓库内 vendored fixture。** 拉取外部开源仓库的网络操作被本机权限策略拦下，于是改成手写陌生仓库。它证明了"基线全绿 + 一句话描述 + 无 traceback 定位"，但没证明跨语言、跨规模（真实 OSS 仓库的 5000 文件规模只会压垮仓库地图和上下文预算，那时得靠 V1 的 `memory/repo_map.py`）。
-- **`context.py` 只观测不压缩。** 超过 `TOKEN_BUDGET` 的 95% 直接 `context_overflow` 止损。大仓库长任务目前会失败，而不是降级。
+- **压缩只到 L2，且它的收益只在 fake 引擎上量化过。** L1 省略工具输出、L2 结构化摘要都已上线并跑通 B2 的 A/B（§4.7），但"压缩后 agent 有没有静默变笨"这件事的真实分布要靠 live 臂：`scripts/b2_compact_ab.py --live`（真实端点各 5 次、成功率 ≥60%）**尚未执行**，所以 B2 只算完成一半。另外 `write_file` 的 content 进的是 assistant 消息，L1 碰不到它 —— 写得很长的会话只能靠 L2 那次付费调用救。
 - **仓库地图固定 30 行、广度优先。** 深目录树的尾部看不到，模型得自己 `find_files`。
 - **live 数字不可复现。** 同一任务重跑轮数会漂移；证据文件因此各自记录自己那一次，不做"平均"。
 - **端点行为依赖。** `tools` 字段偶发被吞，所以工具清单在系统提示里又列了一遍。
@@ -519,6 +550,9 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | 8 | 终端摘要与证据表格数字不一致 | 被权限门拦下的调用会进 `state.tool_calls`，但不产生 trace 的 `tool_call` 记录 | 所有对外数字统一从 trace 派生 | 命令行摘要改用同一份 stats，并单列"被拦"数；v2 的 S8 把这件事做成命名：发起数 `run_end.tool_calls` 与执行数 `tool_executed`（由 `tool_call` 条数得出）两个量各归各位，`test_trace_contract.py` 钉住"两个数不是一回事" |
 | 9 | S9 计划里的 `--compare <file>` / `--tag <name>` 与 `mcc eval-ab` / `mcc sbs` 落不了地 | 基线的身份就是"这张考卷的成绩"，再起一个 tag 名只会引入"拿错基线"这条错误路径；`eval-ab` 需要的配置注入面（`REPO_MAP=off/on`）在 S11 才存在 | SPEC v2 §3.2 增补 as-built 表 | 改成 `eval/baselines/<engine>-<题集哈希>.json` 自动匹配；`eval-ab`/`sbs` 顺延到 S11/S14，不留空壳 |
 | 10 | 负样本标签 `negative` 语义不唯一，第一次跑真批次就出了两条误告警 | "模拟坏行为的题"与"判据必须抓住的题"被塞进同一个标签；`bh-repeat-stall` 老实停下来本该判绿，却被叫成"判据没抓到" | 拆成两层：`negative`（描述性）与 `must-fail`（判据自检） | 新增 `must-fail`，`instrument_checks` 只对其告警；4 道题补标，题集哈希随之变化 |
+| 11 | S10 计划里的 `COMPACT_LEVEL` / `COMPACT_TARGET` 环境变量不该存在 | 阶梯阈值是**配对不变式的一部分**，做成运行时旋钮就等于允许"这一批跑的是另一套阈值"这种无法对比的状态；而 B2 需要的对照只有"开 / 关"一个自由度 | SPEC §5.3 把这两个旋钮改成 `context.py` 常量 + 三个评测旗标（`--no-compact` / `--context-budget` / `--context-hard-limit`） | 常量由 `test_compact.py` 逐条钉住；旗标进 `mcc eval`，被拧过的批次**不许当基线入库**（`--save-baseline` 直接退出码 2，除非 `--force`），并在终端自报家门"这批的分数不与默认配置批混读" |
+| 12 | 止损在 trace 里不可归因（SPEC 未预见） | `turn_start` 每轮只在请求前采样一次，而越线发生在该轮工具结果回填之后：off 臂最后一个采样 23,871 **低于** 30,400 的拒载线，只看 est 序列会把"被预算杀掉"读成"模型自己停了" | 止损自己落一条带判据字段的记录 | 新增 `context_refuse{line, threshold_tokens, est_tokens, ladder_enabled}`，`test_trace_contract.py` 的第四条会话 fixture 钉住它的形状 |
+| 13 | L2 摘要请求会吃掉 FakeLLM 的剧本队列 | `FakeLLM.create()` 每调一次弹出一条剧本，摘要共用队列 → 后续轮次整体错位，B2 首跑因此少写一份汇总模块，看起来像"压缩把 agent 压傻了" | 摘要走独立客户端；fake 引擎给它独立队列 | `Agent(summarizer_llm=...)`（live 默认与主客户端同一个）+ `demos/fakes.py::FakeSummarizer` + `EvalRunner.summarizer_for()` |
 
 ---
 
@@ -554,12 +588,14 @@ mini-claude-code/
 │       └── regression.py       基线读写与逐题配对比较、判据自检
 ├── eval/
 │   ├── tasks/                  24 道考题（题面不泄漏修法；负样本标 must-fail）
+│   ├── tasks-b2/               B2 的载体题 `lc-rollup-api`（必然超 32k 预算的长任务）
 │   ├── fixtures/               被刻意做成有 bug / 测试是红的小仓库（考题的靶子）
+│   │   └── ledger/             八模块 × 100 公开函数 ≈ 19.4 万字符，由脚本确定性生成
 │   ├── baselines/              `fake-<题集哈希>.json` —— B1 的基线，进版本库
 │   ├── results/                live 冒烟的报表与轨迹（live 数字不可复现，所以入库）
 │   └── .work/                  工作副本与逐条记录（忽略，报表与基线才提交）
-├── scripts/                    probe_caps / probe_window / b4_label_check 等证据生成器
-├── tests/                      382 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照）
+├── scripts/                    probe_caps / probe_window / b4_label_check / b2_compact_ab 等证据生成器
+├── tests/                      446 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照）
 └── demos/
     ├── run_demo.py             隔离副本 → 跑真 Agent → 独立判据 → 生成证据
     ├── fake_scripts.py         FakeLLM 轨迹（脚本化，不报自述数字）
@@ -576,7 +612,8 @@ mini-claude-code/
 
 > 本节是 v1.0 收尾时写的展望。**v2.0 的实际计划以 [`SPEC-v2.md`](SPEC-v2.md) 为准**：下面第 1、2 项
 > 分别对应 S10/S11（压缩阶梯、仓库地图）与 S9（`eval/` 评测层），S8 已经先把"数字怎么来的"这件事
-> 修成可核对的口径（§6.4、§6.5）。
+> 修成可核对的口径（§6.4、§6.5）。**第 1 项的压缩那一半已在 S10 落地（§4.7，B2 的 fake 侧达成）；
+> 仓库地图那一半是 S11。第 2 项已在 S9 落地（§4.6，B1）。**
 
 1. **上下文压缩 + `memory/repo_map.py`**（解锁大仓库）。压缩必须保 `tool_calls`/`tool` 配对，且压缩前后跑同一批回归测试，否则就是把 400 换成静默变笨。
 2. **`eval/` 层：把 demo 判据变成可批量跑的评测**。`AgentResult` 的形状现在就定死了，V2 直接消费，不用回改核心循环。目标是从"4 个 demo 各跑一次"升级到"20 个任务 × 5 次，报通过率与方差"。

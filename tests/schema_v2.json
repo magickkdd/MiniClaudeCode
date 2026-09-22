@@ -1,4 +1,43 @@
 {
+  "context_compact": [
+    "after_est",
+    "before_est",
+    "dropped_blocks",
+    "elided_blocks",
+    "kind",
+    "level",
+    "note",
+    "pairing_ok",
+    "parent_span_id",
+    "saved_est",
+    "schema_version",
+    "seq",
+    "session",
+    "span_id",
+    "summary_files",
+    "summary_tokens",
+    "trace_id",
+    "ts",
+    "turn"
+  ],
+  "context_refuse": [
+    "budget_tokens",
+    "est_tokens",
+    "hard_limit_tokens",
+    "kind",
+    "ladder_enabled",
+    "line",
+    "parent_span_id",
+    "pressure",
+    "schema_version",
+    "seq",
+    "session",
+    "span_id",
+    "threshold_tokens",
+    "trace_id",
+    "ts",
+    "turn"
+  ],
   "error": [
     "kind",
     "layer",
@@ -41,6 +80,7 @@
   ],
   "llm_response": [
     "blocks",
+    "id_repairs",
     "kind",
     "latency",
     "parent_span_id",
@@ -69,7 +109,10 @@
     "turn"
   ],
   "run_end": [
+    "context_compactions",
+    "context_elided_blocks",
     "context_peak_tokens",
+    "context_summary_tokens",
     "cost_est",
     "denied_actions",
     "failure_modes",

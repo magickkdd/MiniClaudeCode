@@ -151,6 +151,9 @@ class EvalRunner:
         on_line: Callable[[str], None] | None = None,
         config: Config | None = None,
         baseline: dict[str, Any] | None = None,
+        context_compact: bool | None = None,
+        context_budget: int | None = None,
+        context_hard_limit: int | None = None,
     ) -> None:
         if engine not in ("live", "fake"):
             raise ValueError(f"engine 只能是 live/fake，收到 {engine!r}")
@@ -171,6 +174,13 @@ class EvalRunner:
         self.emit = on_line or (lambda text: None)
         self.config = config
         self.baseline = baseline
+        self.context_compact = context_compact
+        self.context_budget = context_budget
+        self.context_hard_limit = context_hard_limit
+        if context_budget is not None and context_budget < 1:
+            raise ValueError("context_budget 至少 1；要让阶梯不生效请用 context_compact=False")
+        if context_hard_limit is not None and context_hard_limit < 1:
+            raise ValueError("context_hard_limit 至少 1；要关掉止损闸门请抬高它，别设 0")
         self.spent_tokens = 0
         self.aborted = False
         self.manifest = self.out / "manifest.jsonl"
@@ -244,6 +254,7 @@ class EvalRunner:
                 renderer=renderer,
                 confirmer=lambda name, summary: Answer.NO,  # 没人能回答 → 失败关闭，不挂住
                 llm=self.llm_for(config, task, workdir),
+                summarizer_llm=self.summarizer_for(),
                 use_rich=False,
             )
         except Exception as exc:  # noqa: BLE001 - 装配失败也是这道题的结果
@@ -334,7 +345,36 @@ class EvalRunner:
         # 只能从已有配置派生：`Config.redacted()` 会把 api_key 掩码，拿它重建一份
         # 就等于给真实引擎装上一把假钥匙 —— 那种失败会以"网络错误"的形式出现，
         # 排查起来完全看不出根因。
-        return replace(base, project_root=workdir, trace_path=trace, max_turns=task.max_turns)
+        budget = base.token_budget if self.context_budget is None else self.context_budget
+        limit = base.context_hard_limit if self.context_hard_limit is None else self.context_hard_limit
+        if budget >= limit:
+            raise ValueError(
+                f"CONTEXT_HARD_LIMIT({limit:,}) 必须 > token_budget({budget:,})："
+                "熔断线会先于阶梯生效，这批跑的全是 CONTEXT_OVERFLOW"
+            )
+        overrides: dict[str, Any] = {}
+        if self.context_compact is not None:
+            overrides["context_compact"] = self.context_compact
+        if self.context_budget is not None:
+            overrides["token_budget"] = self.context_budget
+        if self.context_hard_limit is not None:
+            overrides["context_hard_limit"] = self.context_hard_limit
+        return replace(
+            base, project_root=workdir, trace_path=trace, max_turns=task.max_turns, **overrides
+        )
+
+    def summarizer_for(self) -> Any:
+        """L2 摘要的客户端。fake 引擎必须给独立队列，live 用主客户端（None 即复用）。
+
+        共用一个 `FakeLLM` 时，摘要请求会从主剧本里 pop 掉一条响应并当成纪要 ——
+        剧本少一步、落盘少一个文件，判据却把这笔账算到题目头上。真实端点按内容回答，
+        不存在这条通路，所以 live 臂返回 None 让它复用。
+        """
+        if self.engine == "fake":
+            from fakes import FakeSummarizer
+
+            return FakeSummarizer()
+        return None
 
     def llm_for(self, config: Config, task: TaskInstance, workdir: Path) -> Any:
         if self.engine == "fake":

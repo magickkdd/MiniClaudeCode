@@ -300,7 +300,9 @@ def test_live_and_offline_classification_agree():
 | `run_start` ★ | **run_id**, **task_id**, user_input_chars, **span_id** |
 | `turn_start` | turn, message_count, **est_tokens**, **span_id**, **parent_span_id** |
 | `llm_request` ★ | turn, message_count, tools_count, est_tokens, **prefix_hash**, **span_id**, **parent_span_id** |
-| `llm_response` | turn, stop_reason, blocks[], usage{prompt,completion}, **latency**, **span_id**, **parent_span_id** |
+| `llm_response` | turn, stop_reason, blocks[], usage{prompt,completion}, **latency**, **span_id**, **parent_span_id**, **id_repairs** ★S10 |
+| `context_compact` ★S10 | turn, level(elide\|summarize), before_est, after_est, saved_est, elided_blocks, dropped_blocks, pairing_ok, summary_tokens, **summary_files**, **note**, span_id, parent_span_id |
+| `context_refuse` ★S10 | turn, **line**(hard_fuse\|l3_refuse), threshold_tokens, est_tokens, budget_tokens, hard_limit_tokens, pressure, **ladder_enabled**, span_id, parent_span_id |
 | `tool_call` | turn, name, args{}, ok, output_chars, latency, **span_id**, **parent_span_id**, **tool_use_id**, **risk**, **verdict**, **drops_assert** |
 | `permission` | turn, tool, decision, rule_hit, **span_id**, **parent_span_id** |
 | `todo_update` | turn, items[] |
@@ -591,6 +593,35 @@ L2 的消息删除算法**只能整组删**：一个 assistant 的 `tool_calls` 
 
 **不做**：自动压缩历史里的 `TextBlock` 叙述（模型的分析文字里常有关键推理）、删除 user 消息、任何"滑动窗口截断"（等价于让 agent 失忆且不会告知它）。
 
+### 3.3.1 实到（S10 落地后补，2026-09-22）
+
+规格里的 `CompactReport` 只有"这次压了多少"，落地时缺了调用方真正需要的三样，as-built 加上：
+`messages`（压缩后的**新列表** —— 不给这个，`pairing_ok` 为真时调用方也无从下手）、
+`summary_tokens`（L2 那次调用自身的开销，§7 报表的"压缩开销"列挂它）、
+`summary_files` + `note`（前者是代码算出的本地改动清单、受 12 项上限约束，后者是"这层没白干但白干了什么"的中文说明）。
+**摘要里能 grep 到已改文件名这条判据押在 `summary_files` 上，不押在模型是否照模板写字段上** —— 模型给空文本时（`test_a_summary_that_says_nothing_still_pays_and_still_shrinks`）清单照样进纪要、账照样记。
+
+四处规格没预见、但必须由代码决定的事：
+
+1. **`run_ladder` 在一层因配对破损被放弃后就 `break`。** L1 免费所以无条件先跑；一旦它证明"这段历史压不得"，再付 L2 那次 LLM 调用买不来任何东西。副作用：被放弃的压缩只留 `elide` 一条记录，报表要能回答"L2 到底试没试过"靠的是每层各一条，而不是只回最后一条。
+2. **`dedupe_tool_use_ids`（`messages.py`）在消息入历史之前改名。** B2 首跑的真实死法：脚本每轮都发 `call_0`，跨轮撞车让 `_guard_pairing` 判定**原始**历史就非法，于是每一次压缩都被放弃 —— 阶梯整体空转，看起来像"压缩无效"。改名用 `<原 id>~<位置>` 而非 uuid，否则 trace 与 eval 基线不再逐字节可比。`llm_response.id_repairs` 记数。
+3. **L2 的摘要请求走 `summarizer_llm`，默认与主 `llm` 同一个客户端。** FakeLLM 每次 `create()` 弹出一条剧本，摘要若共用队列就会偷吃后续轮次（B2 首跑少写 `part_06` 汇总模块的直接原因）；因此 `demos/fakes.py::FakeSummarizer` 自带队列，`EvalRunner.summarizer_for()` 只在 fake 引擎下换上它，live 时两头都是真端点。
+4. **止损必须自己落盘（`context_refuse`）。** 阶梯关掉后，越线发生在那一轮工具结果**回填之后**，而 `turn_start` 每轮只在请求前采样一次 —— 只看 est 序列，off 臂最后一个采样是 23,871，低于 30,400 的拒载线，会被读成"模型自己停了"。现在这条记录带 `line / threshold_tokens / est_tokens / ladder_enabled`，"关阶梯必败"与"某个开关被拧小了"在离线侧可分。
+
+### 3.3.2 B2 实测（`scripts/b2_compact_ab.py` → `eval/results/b2-compact-ab.json`，12 条判据全绿）
+
+载体题 `eval/tasks-b2/lc-rollup-api.json`（`ledger/` 八模块 194,356 字符 + 八份各约 14k 字符的汇总写出）。三臂只差一个变量：
+
+| 臂 | 参数 | 结果 | 轮数 | 峰值 est | 压缩 | 关键数 |
+|---|---|---|---|---|---|---|
+| off | `--no-compact` | **fail / context_overflow** | 4（第 5 轮请求前拒载） | 23,871 采样 / **31,287 越线** | 0 次 | `line=l3_refuse, threshold=30,400, ladder_enabled=false` |
+| on | 默认（32k 预算） | **pass / completed** | 19 | 26,278 | 14 次（L1 12 · L2 2） | L1 省略 8 块、L2 摘要 28 块、省 95,586 est、摘要开销 3,900 tokens、**0 次因配对放弃**、15 次 id 改名 |
+| tight | `--context-budget 12000 --context-hard-limit 15000` | fail / context_overflow | 2 | 9,058 | 1 次 | 负向对照：窗口真不够时阶梯照样救不回来 |
+
+摘要清单里存活 6 个汇总文件名（`reports/part_01..06_summary.py`），判据取 ≥6/8 —— 阶梯压掉的是最老的轮组，最后两份还没被摘要接管。
+`test_compact.py + test_pairing.py` 收集 51 项（SPEC 要求 ≥8）全绿。
+**live 侧（真实端点各 5 次、压缩后成功率 ≥60%）尚未跑**：`--live` 已实现但本批证据只有 fake 臂，B2 的这一半按 §0.3 E1 的纪律标成未达成，不并入"已达成"。
+
 ## 3.4 Memory — `memory/`（S11，8h · **B3**）
 
 **职责**：让 agent 在陌生仓库少花轮数。**MVP 的替代品是 `prompts.py:145 render_repo_map(max_lines=30)` 的广度优先目录树** —— 它按"目录形状"给 30 行，看不到文件用途，深目录尾部直接看不见（README §9 已承认）。
@@ -849,9 +880,10 @@ class LocalBackend / DockerBackend / ExecutionBackend(Protocol)
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `TOKEN_BUDGET` | ~~120000~~ → **`32000`** | **v2 改的是已有默认值**（`config.py:15`）。语义收窄为"成本与注意力质量预算"，压缩阶梯挂它；依据见 §3.3 与 §0.4 |
-| `CONTEXT_HARD_LIMIT` | `200000` | 新增。窗口安全线，只用于"别让请求被拒收"的独立熔断，**不参与压缩阶梯判定** |
-| `COMPACT_LEVEL` | `l1` | `off` / `l1` / `l2`，L3 不可关（它是 v1 的止损） |
-| `COMPACT_TARGET` | `0.65` | 压到该压力线以下即收手 |
+| `CONTEXT_HARD_LIMIT` | `200000` | 新增。窗口安全线，只用于"别让请求被拒收"的独立熔断，**不参与压缩阶梯判定**。`config.py` 加载时就校验 `TOKEN_BUDGET < CONTEXT_HARD_LIMIT`，否则熔断线先于阶梯生效、整批跑的全是 `CONTEXT_OVERFLOW` |
+| `CONTEXT_COMPACT` | `1` | 新增。`0` = 整个阶梯不开（L3 拒载与硬熔断照旧）—— B2 的对照组靠它，命令行是 `mcc eval --no-compact` |
+| ~~`COMPACT_LEVEL`~~ | — | **未落地，S10 as-built 改动**：层级触发点是 `context.py` 的常量（`L1_ELIDE_PRESSURE=0.70 / L1_TARGET_PRESSURE=0.65 / L2_SUMMARIZE_PRESSURE=0.85 / L3_REFUSE_PRESSURE=0.95 / HARD_FUSE_RATIO=0.90`），由 `test_compact.py` 逐条钉住。再叠一个 `off/l1/l2` 环境变量只会让"报表里那次跑的是哪套阈值"变成猜 —— A/B 需要的是**一次一个变量**，所以给的是 `--no-compact` / `--context-budget` / `--context-hard-limit` 三个评测旗标，而不是五个旋钮 |
+| ~~`COMPACT_TARGET`~~ | — | 同上，`L1_TARGET_PRESSURE` 是常量 |
 | `REPO_MAP_TOKENS` | `1500` | 地图预算；`0` = 关闭 |
 | `MEMORY_DIR` | `.mcc` | 工作记忆目录（自动进 `IGNORED_DIRS`） |
 | `MAX_PARALLEL_READS` | `1` | **默认 1 = 不并发**，显式设 >1 才启用（B5 由 A/B 决定默认值） |
@@ -865,7 +897,8 @@ class LocalBackend / DockerBackend / ExecutionBackend(Protocol)
 这张表是**规格**，不是现状。纪律与 §3.1 的孤儿指标同一条：**旋钮必须和消费它的代码同批落地**，
 所以 S8 只加了 `PRICE_PER_MTOKENS`（当轮就被 `_cost_est()` 消费）。其余各自随 Stage 进：
 `TOKEN_BUDGET` 下调与 `CONTEXT_HARD_LIMIT` 在 S10（压缩阶梯挂上去之前，把预算从 120000 砍到
-32000 只会让长任务在没有兜底机制时提前 `CONTEXT_OVERFLOW`），`COMPACT_*` 在 S10，
+32000 只会让长任务在没有兜底机制时提前 `CONTEXT_OVERFLOW`），`CONTEXT_COMPACT` 在 S10（实到，
+见上表：`COMPACT_LEVEL/COMPACT_TARGET` 被合并成常量），
 `REPO_MAP_TOKENS` 在 S11，`MAX_PARALLEL_READS` 在 S12，`MEMORY_DIR` 在 S13，MCP/评测类在 S14/S9。
 
 ---
@@ -933,7 +966,7 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 |---|---|---:|---|
 | **8** ✅ | §3.1 度量修补 + trace v2 + schema 契约 + 失败分类学 + `mcc trace` | 8h | E1/E2/E3 关闭；`test_metrics_have_producers` 绿；对 3 条真实失败轨迹人工核对模式标签（B4 的前半）→ **实到 16 条全核对、`scripts/b4_label_check.py` 退出码 0** |
 | **9** ✅ | §3.2 `eval/`：从 `run_demo.py` 抽 `judge/Check/prepare` → `eval/`；任务集 24 个；runner + 指标 + 断点续跑 + 批次预算 | 14h | 24 任务 fake 引擎全跑通（秒级）+ 6 任务 live 冒烟；一份 `eval/baselines/` 基线文件入库（**B1**）→ **实到：fake 72 次运行 `pass@1=20/24`，12 个 fail 全是 `must-fail` 负样本，退出码 0，p50 930ms / p95 6,880ms；基线 `eval/baselines/fake-0935fa95ca49.json` 已入库；live 冒烟 4/6（证据见 §3.2 末尾与 `eval/results/`）；评测层 113 项测试（全仓 382）** |
-| **10** | §3.3 压缩阶梯 L1+L2 + `assert_pairing` | 10h | **B2**：超预算任务 0 个 400、压缩后成功率 ≥60%；8 项压缩测试绿 |
+| **10** ◐ | §3.3 压缩阶梯 L1+L2 + `assert_pairing` | 10h | **B2**：超预算任务 0 个 400、压缩后成功率 ≥60%；8 项压缩测试绿 · **实到（2026-09-22，`eval/results/b2-compact-ab.json`，12 条判据全绿）**：off 臂第 5 轮 31,287 est 越 `l3_refuse`（阈值 30,400、`ladder_enabled=false`）→ fail/context_overflow；on 臂 19 轮 pass、14 次压缩（L1 12 · L2 2）、省 95,586 est、摘要开销 3,900 tokens、**0 次因配对放弃、0 个配对 400**、摘要清单存活 6/8 个已改文件名；压缩+配对测试 **51 项**绿（要求 ≥8）。**未完成的一半**：真实端点各 5 次的成功率 ≥60% 与"端点侧 0 个 400"要靠 `scripts/b2_compact_ab.py --live`（`--live` 已实现，尚未跑） —— fake 引擎不发 HTTP，它只能证明配对*结构*合法 |
 | **11** | §3.4 `RepoMap` + `MemoryStore` + `.mcc/` | 8h | **B3** 的 A/B 报告（有/无地图）产出真实 delta；地图开销在 §6.2 预算内 |
 
 **Tier 1 结束时该项目就已经回答了 JD 第 7、8、13 三项**，且带着别人抄不走的证据：一条完整的"改动 → 配对回归 → 数字差值"链路。

@@ -32,7 +32,7 @@ from miniclaude.agent.context import ContextManager
 from miniclaude.agent.loop import Agent
 from miniclaude.agent.permissions import PermissionGate, PermissionMode
 from miniclaude.agent.planner import TodoList
-from miniclaude.agent.state import AgentState
+from miniclaude.agent.state import AgentState, TerminationReason
 from miniclaude.agent.todo_tool import WriteTodosTool
 from miniclaude.infra.failure import classify, facts_from_records
 from miniclaude.infra.trace import OUTPUT_CAP, Tracer, prompt_hash, replay, summarize_records
@@ -54,7 +54,7 @@ DERIVED_METRICS = {
     "termination": "最后一条 run_end 的 termination",
     "turns": "len(kind == turn_start)",
     "tool_executed": "len(kind == tool_call)",
-    "tokens": "sum(每条 llm_response 的 usage.prompt + usage.completion)",
+    "tokens": "sum(每条 llm_response 的 usage.prompt + usage.completion) + sum(context_compact.summary_tokens)",
     "tool_sequence": "[tool_call.name]",
     "output_chars": "sum(tool_call.output_chars)",
     "omitted_output_chars": "sum(max(0, tool_call.output_chars - 2 * (OUTPUT_CAP // 2)))",
@@ -174,11 +174,15 @@ def make_traced_agent(
     *,
     session_id: str,
     mode: PermissionMode = PermissionMode.ASK,
+    budget: int = 200_000,
 ) -> tuple[Agent, Path]:
     """真工具 + 假模型 + 真落盘日志。schema 与指标都从这两次会话里取。
 
     `mode=ASK` 且没有确认渠道时，写操作会被保守拒绝 —— 契约要覆盖"发起了但没执行"
     这条形状，否则 `tool_calls` 与 `tool_executed` 永远相等，两个名字看着都一样。
+
+    `budget` 默认取实测窗口量级（200k），所以正常情况下阶梯不会介入，
+    上面那些数字断言才是稳定的；只有 `compacting` 那个 fixture 会把它调小。
     """
     (root / "notes.txt").write_text("第一行\n第二行\n", encoding="utf-8")
     workspace = Workspace(root)
@@ -199,7 +203,7 @@ def make_traced_agent(
         registry=registry,
         gate=PermissionGate(workspace=workspace, mode=mode, confirmer=None),
         system_prompt=PROMPT,
-        context=ContextManager(budget=200_000),
+        context=ContextManager(budget=budget),
         todos=todos,
         tracer=tracer,
         price_per_mtokens=2.5,
@@ -233,6 +237,77 @@ def broken(tmp_path_factory: Any) -> list[dict[str, Any]]:
     agent, trace_path = make_traced_agent(root, [LLMError("端点返回 500")], session_id="broken")
     agent.run("这个任务跑不动")
     return replay(trace_path)
+
+
+# 走到压缩阶梯的那次会话。budget 不是手调出来的魔法数：先用一个不可能触发的
+# 大预算把同一条脚本跑完，量出它最贵的一轮有多少 token，再按 `峰值 / 0.75` 定
+# budget —— 压力因此稳定落在 [L1 的 0.70, L2 的 0.85) 之间，阶梯会做事，
+# 但绝不掏 LLM 调用（L2 要花钱，而 FakeLLM 的脚本是按轮次排的，多要一次就全盘错位）。
+COMPACT_SCRIPT = [
+    scripted_tool_calls([("read_file", {"path": "big.txt"})]),
+    scripted_tool_calls([("read_file", {"path": "notes.txt"})]),
+    scripted_final_text("读完了。"),
+]
+
+COMPACT_PRESSURE = 0.75
+
+
+def _seed_big_file(root: Path) -> None:
+    (root / "big.txt").write_text("压缩契约测试用的长文本 0123456789\n" * 900, encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def compacting(tmp_path_factory: Any) -> list[dict[str, Any]]:
+    """`context_compact` 的字段形状必须由真事件钉住，不能照着代码手敲一份。"""
+    probe_root = tmp_path_factory.mktemp("compact-probe")
+    _seed_big_file(probe_root)
+    probe, probe_path = make_traced_agent(
+        probe_root, COMPACT_SCRIPT, session_id="compact-probe", budget=1_000_000
+    )
+    probe.run("读两遍文件")
+    # 阶梯看的是**估算**，不是端点回来的 usage —— 所以峰值也要从 turn_start 的 est_tokens 量。
+    # （假模型不回填 usage，`context_peak_tokens` 会是 0，拿它定 budget 就永远压不动。）
+    peak = max(
+        (int(r.get("est_tokens") or 0) for r in replay(probe_path) if r.get("kind") == "turn_start"),
+        default=0,
+    )
+    assert peak > 0, "探针没量到估算峰值，budget 就成了瞎猜"
+
+    root = tmp_path_factory.mktemp("compact")
+    _seed_big_file(root)
+    agent, trace_path = make_traced_agent(
+        root, COMPACT_SCRIPT, session_id="compact", budget=int(peak / COMPACT_PRESSURE)
+    )
+    agent.run("读两遍文件")
+    records = replay(trace_path)
+    events = [r for r in records if r.get("kind") == "context_compact"]
+    assert events, (
+        f"这条会话本该踩到 L1（峰值 {peak:,} tokens / 预算 {int(peak / COMPACT_PRESSURE):,}）却没压缩，"
+        "schema 快照就悄悄不再钉这个 kind 了。"
+    )
+    return records
+
+
+@pytest.fixture(scope="module")
+def refusing(tmp_path_factory: Any) -> list[dict[str, Any]]:
+    """被上下文预算止损杀掉的那次会话：只有它才产出 `context_refuse`。
+
+    这个 kind 是 B2 对照组的归因凭据（"关阶梯必败"必须能和"开关被拧小了"分开），
+    所以它的字段形状同样得由真事件钉住。budget 直接给一个不可能够用的量级就行：
+    工具 schema 本身就已经超压，第一轮请求前就该停。
+    """
+    root = tmp_path_factory.mktemp("refuse")
+    agent, trace_path = make_traced_agent(
+        root, [scripted_final_text("不会被用到")], session_id="refuse", budget=400
+    )
+    result = agent.run("读 notes.txt")
+    records = replay(trace_path)
+    events = [r for r in records if r.get("kind") == "context_refuse"]
+    assert result.termination is TerminationReason.CONTEXT_OVERFLOW, (
+        "这条会话本该死在预算上；死因变了就说明 `context_refuse` 正在悄悄失去覆盖"
+    )
+    assert len(events) == 1, f"止损记录应当恰好一条，实到 {len(events)}"
+    return records
 
 
 # --------------------------------------------------------------- 不变式
@@ -326,14 +401,18 @@ def test_live_and_offline_classification_agree(session: Any) -> None:
     assert [found.mode.value for found in classify(facts_from_records(session[0]))] == report["failure_modes"]
 
 
-def test_trace_schema_snapshot(session: Any, broken: Any) -> None:
+def test_trace_schema_snapshot(session: Any, broken: Any, compacting: Any, refusing: Any) -> None:
     """每个 kind 的字段集合与快照逐字段比对。
 
     加字段/改名/删字段时：先跑 `MCC_REGEN_SCHEMA=1 pytest tests/test_trace_contract.py`
     重生成 `tests/schema_v2.json`，再同步 SPEC v2 §3.1 的事件表 —— 两处不一致就是
     "文档说的和代码做的不是一回事"，v1 的 `session_end` 事故（§0.3 E3）正是这么发生的。
+
+    四条会话各带一段形状：`session` 是正常流程，`broken` 只在那里出现的 `error`，
+    `compacting` 提供 `context_compact`，`refusing` 提供 `context_refuse`。
+    少一条，快照上就少一个无人看守的 kind。
     """
-    actual = _keys_by_kind(list(session[0]) + list(broken))
+    actual = _keys_by_kind(list(session[0]) + list(broken) + list(compacting) + list(refusing))
     for kind, keys in sorted(actual.items()):
         assert keys >= COMMON_ENVELOPE, f"{kind} 缺了公共字段：{sorted(COMMON_ENVELOPE - keys)}"
     if os.environ.get("MCC_REGEN_SCHEMA") == "1":

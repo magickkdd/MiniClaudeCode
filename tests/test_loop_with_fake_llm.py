@@ -21,13 +21,24 @@ from fakes import (
     scripted_tool_calls,
     scripted_truncated,
 )
-from miniclaude.agent.context import ContextManager
-from miniclaude.agent.loop import MAX_OUTPUT_CHARS, STALL_LIMIT, Agent, EventKind, _cap
+from miniclaude.agent.context import (
+    HARD_FUSE_RATIO,
+    L3_REFUSE_PRESSURE,
+    ContextManager,
+)
+from miniclaude.agent.loop import (
+    MAX_OUTPUT_CHARS,
+    STALL_LIMIT,
+    Agent,
+    AgentEvent,
+    EventKind,
+    _cap,
+)
 from miniclaude.agent.permissions import Answer, PermissionGate, PermissionMode
 from miniclaude.agent.planner import TodoList, TodoStatus
 from miniclaude.agent.state import TerminationReason
 from miniclaude.agent.todo_tool import WriteTodosTool
-from miniclaude.infra.trace import Tracer, summarize
+from miniclaude.infra.trace import Tracer, replay, summarize
 from miniclaude.llm.openai_compat import LLMError
 from miniclaude.messages import Role, Usage
 from miniclaude.tools.registry import ToolRegistry
@@ -47,6 +58,7 @@ def make_agent(
     confirmer: Any = None,
     on_event: Any = None,
     tracer: Any = None,
+    summarizer_llm: Any = None,
 ) -> Agent:
     """真工具 + 假模型。工具不假，回填出来的 observation 才是真的。"""
     todos = TodoList()
@@ -54,6 +66,7 @@ def make_agent(
     gate = PermissionGate(workspace=workspace, mode=mode, confirmer=confirmer)
     return Agent(
         llm=FakeLLM(responses),
+        summarizer_llm=summarizer_llm,
         registry=registry,
         gate=gate,
         system_prompt=SYSTEM,
@@ -219,6 +232,181 @@ def test_context_overflow_stops_before_calling_llm(ws: Workspace) -> None:
 
     assert result.termination is TerminationReason.CONTEXT_OVERFLOW
     assert agent.llm.call_count == 0
+
+
+def test_a_budget_death_names_the_line_it_crossed(ws: Workspace, tmp_path: Path) -> None:
+    """被预算杀掉的会话，trace 必须自己说清越的是哪条线。
+
+    B2 的对照组全靠这句话立起来：off 臂第 4 轮就没再发请求，如果 trace 里只有
+    `run_end: context_overflow`，那"关阶梯必败"与"某个开关被碰巧拧小了""模型自己停了"
+    在离线侧长得一模一样 —— 归因能力等于零。这里同时钉住两条线各自的 `line` 标签。
+    """
+    trace_path = tmp_path / "off.jsonl"
+    agent = make_agent(
+        [scripted_tool_calls([("read_file", {"path": "notes.txt"})])] * 3,
+        ws,
+        context=ContextManager(budget=400, enabled=False),
+        tracer=Tracer(trace_path, session_id="off"),
+    )
+    result = agent.run("读")
+
+    refusals = [r for r in replay(trace_path) if r["kind"] == "context_refuse"]
+    assert result.termination is TerminationReason.CONTEXT_OVERFLOW
+    assert len(refusals) == 1, "一次止损只该记一条：多写会把'哪一轮死的'重新变成推断"
+    refuse = refusals[0]
+    assert refuse["line"] == "l3_refuse"
+    assert refuse["ladder_enabled"] is False, "对照组必须能从 trace 里看出来是阶梯没开"
+    assert refuse["threshold_tokens"] == int(L3_REFUSE_PRESSURE * 400)
+    assert refuse["est_tokens"] >= refuse["threshold_tokens"]
+
+
+def test_the_hard_fuse_is_recorded_as_a_different_line(ws: Workspace, tmp_path: Path) -> None:
+    """熔断线与拒载线必须是两个可区分的 `line`：它们救的是不同的事故。"""
+    trace_path = tmp_path / "fuse.jsonl"
+    agent = make_agent(
+        [scripted_tool_calls([("read_file", {"path": "notes.txt"})])] * 3,
+        ws,
+        context=ContextManager(budget=100_000, hard_limit=400),
+        tracer=Tracer(trace_path, session_id="fuse"),
+    )
+    result = agent.run("读")
+
+    [refuse] = [r for r in replay(trace_path) if r["kind"] == "context_refuse"]
+    assert result.termination is TerminationReason.CONTEXT_OVERFLOW
+    assert refuse["line"] == "hard_fuse"
+    assert refuse["ladder_enabled"] is True, "熔断先于阶梯：这条记录里阶梯是开着的"
+    assert refuse["threshold_tokens"] == int(HARD_FUSE_RATIO * 400)
+
+
+def test_an_abandoned_compaction_leaves_a_chinese_note_on_the_wire(tmp_path: Path) -> None:
+    """配对破损时放弃压缩，必须在事件流和 trace 里留下说得清原因的一条。
+
+    静默放弃看起来跟"阶梯没生效"一模一样 —— 而它恰恰是 B2 首跑的真实死法。
+    这里用一段"调用没回填"的历史冒充截断快照恢复回来的会话（S13 的 durable resume
+    会真走到这里），要求两层都放弃、每层都带中文 note，并且**一个字都不少**地
+    把原历史留在原地。
+    """
+    from miniclaude.cli.render import Renderer
+    from miniclaude.messages import Message, TextBlock, ToolResultBlock, ToolUseBlock
+
+    body = "x = 1\n" * 600                     # 写在 assistant 消息里，L1 省不掉 —— 逼它走到 L2
+    trace_path = tmp_path / "abandoned.jsonl"
+    events: list[AgentEvent] = []
+    agent = make_agent(
+        [scripted_final_text("先按现状收尾。")],
+        Workspace(tmp_path),
+        context=ContextManager(budget=2_000),
+        on_event=lambda event: events.append(event) if event.kind is EventKind.CONTEXT_COMPACT else None,
+        tracer=Tracer(trace_path, session_id="abandoned"),
+    )
+    agent.messages = [Message.user_text("继续上次没做完的活")]
+    for i in range(4):
+        agent.messages.append(
+            Message.assistant([
+                TextBlock(f"第 {i} 步"),
+                ToolUseBlock(id=f"c{i}", name="write_file", input={"path": f"m{i}.py", "content": body}),
+            ])
+        )
+        agent.messages.append(Message.tool_results([ToolResultBlock(tool_use_id=f"c{i}", content="已写入")]))
+    agent.messages.append(
+        Message.assistant([ToolUseBlock(id="orphan", name="read_file", input={"path": "m9.py"})])
+    )  # 只有调用、没有结果 —— 快照被截断时的典型形状
+
+    agent.run("接着干")
+
+    compacted = [event.payload for event in events if event.payload.get("pairing_ok") is False]
+    assert compacted, "该放弃的没放弃 —— 阶梯会在破损历史上悄悄空转"
+    assert all("配对破损" in str(payload.get("note")) for payload in compacted)
+    assert {payload.get("level") for payload in compacted} == {"elide"}
+    assert [event.payload.get("level") for event in events] == ["elide"], (
+        "免费层已经证明会压坏，就不该再去买 L2 那次调用 —— 阶梯要在这里收手"
+    )
+    records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    assert any(
+        r["kind"] == "context_compact" and r["pairing_ok"] is False and "配对破损" in r["note"] for r in records
+    )
+    assert len(agent.messages) >= 10, "放弃压缩不能顺手丢掉历史"
+
+    printed: list[str] = []
+    renderer = Renderer(verbose=False, write=printed.append, use_rich=False)
+    for event in events:
+        renderer.handle(event)
+    screen = "\n".join(printed)
+    assert "压缩被放弃" in screen and "配对破损" in screen, "终端上看不见的放弃，看起来就跟阶梯没生效一样"
+
+
+def test_the_summary_request_pays_from_its_own_queue_not_the_script(ws: Workspace) -> None:
+    """L2 的摘要请求必须走独立客户端：共用队列时它从主剧本 pop 一条当纪要。
+
+    B2 首跑就死在这里 —— 少写了一个汇总文件，判据把这笔账算成"题目没过"，
+    而剧本一条没少跑才是真相。这里连账一起钉住：主剧本的 usage 恒为 0，
+    所以 `usage.total` 只可能来自摘要器。
+    """
+    from fakes import FakeSummarizer
+
+    body = "x = 1\n" * 900                     # 5,400 chars ≈ 1,543 est tokens
+    summarizer = FakeSummarizer(prompt_tokens=100, completion_tokens=20)
+    agent = make_agent(
+        [
+            scripted_tool_calls([("write_file", {"path": f"m{i}.py", "content": body})], id_prefix=f"w{i}")
+            for i in range(6)
+        ]
+        + [scripted_final_text("六个模块写完了。")],
+        ws,
+        # 9,000：第 4 轮越 0.85 的 L2 线，又没先到 0.95 的拒载线 —— 与 B2 同一条比例
+        context=ContextManager(budget=9_000),
+        summarizer_llm=summarizer,
+    )
+    result = agent.run("把这六个模块各写一遍")
+
+    assert agent.llm.call_count == 7, "剧本被摘要请求吃掉一条 —— 步数就不对了"
+    assert summarizer.call_count >= 1, "预算 9,000 写六份 5,400 字符的模块，L2 不可能没试"
+    assert result.termination is TerminationReason.COMPLETED
+    assert result.state.usage.total == summarizer.call_count * 120
+    for i in range(6):
+        assert (ws.root / f"m{i}.py").read_text(encoding="utf-8") == body
+
+
+def test_a_summary_that_says_nothing_still_pays_and_still_shrinks(ws: Workspace) -> None:
+    """负向对照：摘要器回空话时，省下的量、记下的开销、报出的文件名各是什么。
+
+    与上一条同规模跑，唯一变量是摘要器回不回话：
+    * 主剧本步数不受影响（独立队列的反方向证明）；
+    * `dropped_blocks > 0` 且 `after_est < before_est` —— "压缩确实省了"由实测负责，
+      不靠摘要文本有多长；
+    * 开销照记：空话也是花了一次调用买来的；
+    * `summary_files` **仍然**列出已改文件 —— 那份清单由代码算（`_local_digest`），
+      故意不押在模型记性上，所以模型失声时 B2 的 grep 判据依然成立；
+    * `note` 说清"这次纪要里只有本地清单"。
+    """
+    from fakes import FakeSummarizer
+
+    body = "x = 1\n" * 900
+    silent = FakeSummarizer(prompt_tokens=100, completion_tokens=20, always_empty=True)
+    agent = make_agent(
+        [
+            scripted_tool_calls([("write_file", {"path": f"m{i}.py", "content": body})], id_prefix=f"w{i}")
+            for i in range(6)
+        ]
+        + [scripted_final_text("六个模块写完了。")],
+        ws,
+        context=ContextManager(budget=9_000),
+        summarizer_llm=silent,
+    )
+    events: list[dict[str, Any]] = []
+    agent.on_event = lambda e: events.append(e.payload) if e.kind is EventKind.CONTEXT_COMPACT else None
+    result = agent.run("把这六个模块各写一遍")
+
+    assert agent.llm.call_count == 7
+    assert result.termination is TerminationReason.COMPLETED
+    assert result.state.usage.total == silent.call_count * 120, "空纪要也照收开销"
+    summaries = [payload for payload in events if payload.get("level") == "summarize"]
+    assert summaries, "六份 5,400 字符的写入，L2 不可能没被试"
+    replaced = [payload for payload in summaries if payload["dropped_blocks"] > 0]
+    assert replaced, "什么都没换掉 —— 空摘要也该把老历史压走"
+    assert all(payload["after_est"] < payload["before_est"] for payload in replaced)
+    assert all("占位文本" in str(payload.get("note")) for payload in replaced)
+    assert all(payload["summary_files"] for payload in replaced), "本地清单不该因为模型没说话就空掉"
 
 
 def test_stall_detection_stops_identical_repetition(ws: Workspace) -> None:

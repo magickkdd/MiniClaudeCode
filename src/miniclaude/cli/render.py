@@ -71,6 +71,8 @@ class Renderer:
                 self._preview(str(data["output"]))
         elif kind is EventKind.TODO_UPDATE:
             self.todos(list(data.get("items") or []))
+        elif kind is EventKind.CONTEXT_COMPACT:
+            self._compaction(data)
         elif kind is EventKind.WARNING:
             self._write("⚠ " + str(data.get("message") or data.get("reason") or ""))
         elif kind is EventKind.ERROR:
@@ -144,6 +146,20 @@ class Renderer:
                 self._dim(f"  授权：{data.get('reason')}")
             return
         self._dim(f"  已拦下 {data.get('tool')}：{data.get('reason')}")
+
+    def _compaction(self, data: dict[str, Any]) -> None:
+        """压缩必须可见：Agent 在改写自己的记忆，静默做这件事用户无法复盘。"""
+        before = int(data.get("before_est") or 0)
+        after = int(data.get("after_est") or 0)
+        delta = f"{before:,} → {after:,} tokens"
+        if data.get("level") == "summarize":
+            spent = int(data.get("summary_tokens") or 0)
+            detail = f"摘要 {int(data.get('dropped_blocks') or 0)} 段历史（自身花 {spent:,}）· {delta}"
+        else:
+            detail = f"省略 {int(data.get('elided_blocks') or 0)} 块旧工具输出 · {delta}"
+        self._dim(f"≈ 上下文压缩 [{data.get('level')}] {detail}")
+        if not data.get("pairing_ok", True):
+            self._write(f"⚠ 压缩被放弃：{data.get('note') or '报文配对破损'}")
 
     def _preview(self, output: str) -> None:
         lines = [line for line in output.splitlines() if line.strip()][:6]

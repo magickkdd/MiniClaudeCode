@@ -12,7 +12,12 @@ DEFAULTS: dict[str, int] = {
     "MAX_TOKENS": 4096,
     "BASH_TIMEOUT": 60,
     "TOOL_OUTPUT_LIMIT": 30_000,
-    "TOKEN_BUDGET": 120_000,
+    # 两个旋钮，不是一根线（SPEC v2 §0.4 / §3.3）。v1 把它们混在 TOKEN_BUDGET=120000 里，
+    # 结果两头都不成立：120000 既不是真实边界（实测窗口 ≥ 270,570），也不是合理预算
+    # （v1 全部 live 轨迹峰值仅 12,185，压力 0.10 → 压缩阶梯是死代码）。
+    "TOKEN_BUDGET": 32_000,          # 成本与注意力质量预算：压缩阶梯挂它
+    "CONTEXT_HARD_LIMIT": 200_000,   # 只防一件事：请求被端点拒收
+    "CONTEXT_COMPACT": 1,            # 0 = 关掉阶梯（B2 要"压缩关闭时失败"这一半对照）
     "MAX_TOTAL_TOKENS": 800_000,
     "LLM_REQUEST_TIMEOUT": 120,
 }
@@ -42,6 +47,8 @@ class Config:
     bash_timeout: int = DEFAULTS["BASH_TIMEOUT"]
     tool_output_limit: int = DEFAULTS["TOOL_OUTPUT_LIMIT"]
     token_budget: int = DEFAULTS["TOKEN_BUDGET"]
+    context_hard_limit: int = DEFAULTS["CONTEXT_HARD_LIMIT"]
+    context_compact: bool = bool(DEFAULTS["CONTEXT_COMPACT"])
     max_total_tokens: int = DEFAULTS["MAX_TOTAL_TOKENS"]
     request_timeout: int = DEFAULTS["LLM_REQUEST_TIMEOUT"]
     price_per_mtokens: float = 0.0
@@ -63,6 +70,15 @@ class Config:
         trace_raw = _get("TRACE_PATH")
         trace_path = _resolve(trace_raw, root) if trace_raw else None
 
+        budget = _int("TOKEN_BUDGET")
+        hard_limit = _int("CONTEXT_HARD_LIMIT")
+        if budget >= hard_limit:
+            # 预算线压在硬熔断之上，阶梯就永远轮不到出手 —— 每次都先被端点拒收。
+            raise ConfigError(
+                f"TOKEN_BUDGET({budget}) 必须小于 CONTEXT_HARD_LIMIT({hard_limit})："
+                "前者是压缩阶梯挂的预算，后者是防拒收的熔断，调反了等于关掉压缩。"
+            )
+
         return cls(
             base_url=base_url,
             api_key=api_key,
@@ -72,7 +88,9 @@ class Config:
             max_tokens=_int("MAX_TOKENS"),
             bash_timeout=_int("BASH_TIMEOUT"),
             tool_output_limit=_int("TOOL_OUTPUT_LIMIT"),
-            token_budget=_int("TOKEN_BUDGET"),
+            token_budget=budget,
+            context_hard_limit=hard_limit,
+            context_compact=bool(_int("CONTEXT_COMPACT")),
             max_total_tokens=_int("MAX_TOTAL_TOKENS"),
             request_timeout=_int("LLM_REQUEST_TIMEOUT"),
             price_per_mtokens=_float("PRICE_PER_MTOKENS"),
@@ -90,6 +108,8 @@ class Config:
             "max_tokens": self.max_tokens,
             "max_total_tokens": self.max_total_tokens,
             "token_budget": self.token_budget,
+            "context_hard_limit": self.context_hard_limit,
+            "context_compact": self.context_compact,
             "price_per_mtokens": self.price_per_mtokens,
             "trace_path": str(self.trace_path) if self.trace_path else None,
         }
