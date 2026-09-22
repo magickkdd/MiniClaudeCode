@@ -446,7 +446,12 @@ class Agent:
     # --------------------------------------------------------------- 工具
 
     def _run_tools(self, calls: list[Any]) -> tuple[list[ToolResultBlock], bool]:
-        """顺序执行本轮全部调用。刻意不并发 —— 副作用顺序必须与模型声明顺序一致。"""
+        """顺序执行本轮全部调用。刻意不并发 —— 副作用顺序必须与模型声明顺序一致。
+
+        SPEC v2 §3.5 排过的只读并发在动手前被 §3.5.1 的实测砍掉：可并行的轮平均只值
+        2.9ms，线程池开到无限大也只省 live 墙钟的 0.011%（scripts/probe_parallel_share.py
+        重跑即得）。要复活它，先换一个读取本身很贵的任务形状。
+        """
         results: list[ToolResultBlock] = []
         executed_any = False
 

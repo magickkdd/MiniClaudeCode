@@ -1,0 +1,350 @@
+{
+  "caveats": [
+    "trace 里的 tool_call 只有**执行过**的调用：被权限门拒掉的调用当场就有结论，不占线程，所以把它们排除在统计之外是对的。",
+    "分母是「轮」，但并发的实际收益单位是**被省下的串行执行次数**（extra_calls_available），只读调用本身只有几毫秒，占比高也不必然意味着墙钟降 15%（B5 量的是墙钟）。",
+    "墙钟上界假设线程池无限大；真实收益更小。它仍然过不了 B5 那条线的话，结论与实现质量无关，是任务形状决定的。",
+    "fake 批次的墙钟另说：那里 LLM 是瞬时的，工具时间≈全部时间，所以并发在 fake 上能省的比例远高于 live —— 拿 fake 的 p50 给 B5 签字会是自欺。"
+  ],
+  "decision": "闸①（§3.5 的轮占比 20%）：合计 21.5% → 够线；但最新的一层 b3-live 单独看是 19.8% → 差一线",
+  "decision_wall_clock": "闸②（B5 的墙钟 p50 15%）：可省上限只占每次运行墙钟的 0.009%（p50，n=46）—— 不可达。原因在轨迹里：工具执行只占运行墙钟的 9.59%，LLM 延迟占 90.18%。",
+  "definition": {
+    "denominator": "执行过至少一个工具的轮（不是全部轮：模型直接回话的轮调度器碰不到）",
+    "note_field_missing": "§3.5 假设 S8 加了 parallelizable_in_round，实际没加（src/ 里 grep 为空），所以这里从 tool_call 的 turn/name/risk/latency 反推，规则与将来 parallelizable() 同源",
+    "parallelizable_round": "同一轮 ≥2 个调用，且全部 risk=read 且不含 write_todos",
+    "saveable_ms": "每个可并行轮 (Σ latency − max latency) 之和，即线程池无限大时的上界",
+    "why_not_risk_level_alone": "write_todos 的 risk_level 就是 READ，但它改 self.todos"
+  },
+  "gate": 0.2,
+  "gate_b5_wall_p50": 0.15,
+  "keep_s12": true,
+  "live_only": true,
+  "overall": {
+    "calls_per_round_histogram": {
+      "1": 99,
+      "2": 108,
+      "3": 35,
+      "4": 12,
+      "5": 5,
+      "7": 2
+    },
+    "extra_calls_available": 104,
+    "parallelizable_rounds": 56,
+    "rounds_with_2plus_calls": 162,
+    "rounds_with_tools": 261,
+    "share_of_multi_call_rounds": 0.3457,
+    "share_of_tool_rounds": 0.2146,
+    "top_combos_of_multi_call_rounds": [
+      {
+        "combo": "edit_file+edit_file",
+        "count": 23
+      },
+      {
+        "combo": "read_file+read_file",
+        "count": 22
+      },
+      {
+        "combo": "read_file+read_file+read_file",
+        "count": 20
+      },
+      {
+        "combo": "edit_file+run_tests",
+        "count": 19
+      },
+      {
+        "combo": "read_file+read_file+read_file+read_file",
+        "count": 10
+      },
+      {
+        "combo": "read_file+run_tests",
+        "count": 7
+      },
+      {
+        "combo": "bash+bash",
+        "count": 7
+      },
+      {
+        "combo": "bash+read_file",
+        "count": 7
+      }
+    ],
+    "top_combos_of_parallelizable_rounds": [
+      {
+        "combo": "read_file+read_file",
+        "count": 22
+      },
+      {
+        "combo": "read_file+read_file+read_file",
+        "count": 20
+      },
+      {
+        "combo": "read_file+read_file+read_file+read_file",
+        "count": 10
+      },
+      {
+        "combo": "find_files+read_file",
+        "count": 2
+      },
+      {
+        "combo": "read_file+read_file+read_file+read_file+read_file+read_file+read_file",
+        "count": 1
+      },
+      {
+        "combo": "read_file+read_file+read_file+read_file+read_file",
+        "count": 1
+      }
+    ],
+    "wall_clock": {
+      "llm_ms": 1343113.0,
+      "llm_ms_share_of_run": 0.90175,
+      "run_wall_ms": 1489447.0,
+      "runs_sampled": 46,
+      "saveable_ms_upper_bound": 162.0,
+      "saveable_share_of_run_wall": 0.00011,
+      "saveable_share_of_run_wall_p50": 9e-05,
+      "saveable_share_of_tool_wall": 0.00113,
+      "tool_ms": 142789.0,
+      "tool_ms_share_of_run": 0.09587
+    }
+  },
+  "per_source": {
+    "b3-live": {
+      "calls_per_round_histogram": {
+        "1": 86,
+        "2": 85,
+        "3": 19,
+        "4": 12,
+        "5": 3,
+        "7": 2
+      },
+      "extra_calls_available": 79,
+      "parallelizable_rounds": 41,
+      "rounds_with_2plus_calls": 121,
+      "rounds_with_tools": 207,
+      "share_of_multi_call_rounds": 0.3388,
+      "share_of_tool_rounds": 0.1981,
+      "top_combos_of_multi_call_rounds": [
+        {
+          "combo": "edit_file+edit_file",
+          "count": 21
+        },
+        {
+          "combo": "edit_file+run_tests",
+          "count": 18
+        },
+        {
+          "combo": "read_file+read_file",
+          "count": 16
+        },
+        {
+          "combo": "read_file+read_file+read_file",
+          "count": 13
+        },
+        {
+          "combo": "read_file+read_file+read_file+read_file",
+          "count": 10
+        },
+        {
+          "combo": "read_file+run_tests",
+          "count": 6
+        },
+        {
+          "combo": "bash+bash",
+          "count": 5
+        },
+        {
+          "combo": "bash+read_file",
+          "count": 5
+        }
+      ],
+      "top_combos_of_parallelizable_rounds": [
+        {
+          "combo": "read_file+read_file",
+          "count": 16
+        },
+        {
+          "combo": "read_file+read_file+read_file",
+          "count": 13
+        },
+        {
+          "combo": "read_file+read_file+read_file+read_file",
+          "count": 10
+        },
+        {
+          "combo": "find_files+read_file",
+          "count": 1
+        },
+        {
+          "combo": "read_file+read_file+read_file+read_file+read_file+read_file+read_file",
+          "count": 1
+        }
+      ],
+      "wall_clock": {
+        "llm_ms": 997489.0,
+        "llm_ms_share_of_run": 0.89194,
+        "run_wall_ms": 1118331.0,
+        "runs_sampled": 36,
+        "saveable_ms_upper_bound": 120.0,
+        "saveable_share_of_run_wall": 0.00011,
+        "saveable_share_of_run_wall_p50": 9e-05,
+        "saveable_share_of_tool_wall": 0.00102,
+        "tool_ms": 117528.0,
+        "tool_ms_share_of_run": 0.10509
+      }
+    },
+    "demo-live": {
+      "calls_per_round_histogram": {
+        "1": 5,
+        "2": 8,
+        "3": 8,
+        "5": 2
+      },
+      "extra_calls_available": 11,
+      "parallelizable_rounds": 5,
+      "rounds_with_2plus_calls": 18,
+      "rounds_with_tools": 23,
+      "share_of_multi_call_rounds": 0.2778,
+      "share_of_tool_rounds": 0.2174,
+      "top_combos_of_multi_call_rounds": [
+        {
+          "combo": "read_file+read_file+read_file",
+          "count": 3
+        },
+        {
+          "combo": "bash+bash",
+          "count": 2
+        },
+        {
+          "combo": "edit_file+edit_file+run_tests",
+          "count": 1
+        },
+        {
+          "combo": "read_file+read_file+read_file+read_file+run_tests",
+          "count": 1
+        },
+        {
+          "combo": "bash+run_tests",
+          "count": 1
+        },
+        {
+          "combo": "bash+read_file",
+          "count": 1
+        },
+        {
+          "combo": "bash+read_file+write_todos",
+          "count": 1
+        },
+        {
+          "combo": "write_file+write_file+write_file",
+          "count": 1
+        }
+      ],
+      "top_combos_of_parallelizable_rounds": [
+        {
+          "combo": "read_file+read_file+read_file",
+          "count": 3
+        },
+        {
+          "combo": "read_file+read_file",
+          "count": 1
+        },
+        {
+          "combo": "read_file+read_file+read_file+read_file+read_file",
+          "count": 1
+        }
+      ],
+      "wall_clock": {
+        "llm_ms": 188400.0,
+        "llm_ms_share_of_run": 0.9349,
+        "run_wall_ms": 201518.0,
+        "runs_sampled": 4,
+        "saveable_ms_upper_bound": 19.0,
+        "saveable_share_of_run_wall": 9e-05,
+        "saveable_share_of_run_wall_p50": 0.00011,
+        "saveable_share_of_tool_wall": 0.00146,
+        "tool_ms": 13013.0,
+        "tool_ms_share_of_run": 0.06457
+      }
+    },
+    "earlier-live": {
+      "calls_per_round_histogram": {
+        "1": 8,
+        "2": 15,
+        "3": 8
+      },
+      "extra_calls_available": 14,
+      "parallelizable_rounds": 10,
+      "rounds_with_2plus_calls": 23,
+      "rounds_with_tools": 31,
+      "share_of_multi_call_rounds": 0.4348,
+      "share_of_tool_rounds": 0.3226,
+      "top_combos_of_multi_call_rounds": [
+        {
+          "combo": "read_file+read_file",
+          "count": 5
+        },
+        {
+          "combo": "read_file+read_file+read_file",
+          "count": 4
+        },
+        {
+          "combo": "edit_file+edit_file",
+          "count": 2
+        },
+        {
+          "combo": "bash+find_files",
+          "count": 1
+        },
+        {
+          "combo": "run_tests+run_tests",
+          "count": 1
+        },
+        {
+          "combo": "find_files+read_file",
+          "count": 1
+        },
+        {
+          "combo": "run_tests+write_file",
+          "count": 1
+        },
+        {
+          "combo": "bash+read_file",
+          "count": 1
+        }
+      ],
+      "top_combos_of_parallelizable_rounds": [
+        {
+          "combo": "read_file+read_file",
+          "count": 5
+        },
+        {
+          "combo": "read_file+read_file+read_file",
+          "count": 4
+        },
+        {
+          "combo": "find_files+read_file",
+          "count": 1
+        }
+      ],
+      "wall_clock": {
+        "llm_ms": 157224.0,
+        "llm_ms_share_of_run": 0.92704,
+        "run_wall_ms": 169598.0,
+        "runs_sampled": 6,
+        "saveable_ms_upper_bound": 23.0,
+        "saveable_share_of_run_wall": 0.00014,
+        "saveable_share_of_run_wall_p50": 0.00017,
+        "saveable_share_of_tool_wall": 0.00188,
+        "tool_ms": 12248.0,
+        "tool_ms_share_of_run": 0.07222
+      }
+    }
+  },
+  "question": "把只读调用放进线程池，能影响到多大比例的轮、能省下多少墙钟？",
+  "schema": 1,
+  "sources": {
+    "b3-live": 36,
+    "demo-live": 4,
+    "earlier-live": 6
+  },
+  "spec": "SPEC v2 §3.5 / §7.2 行 12 —— 收益先测再改"
+}

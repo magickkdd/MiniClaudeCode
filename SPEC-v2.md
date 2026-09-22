@@ -1,7 +1,10 @@
 # Mini Claude Code Agent System SPEC v2.0
 
-版本：v2.0-draft1 · 日期：2026-09-22 · 状态：**S8 已交付**（E1/E2/E3 关闭、`test_metrics_have_producers` 绿、
-B4 前半 16 条轨迹人工核对退出码 0），**S9 评测层开工**（三问的答复见文末「附」）
+版本：v2.0-draft1 · 日期：2026-09-22 · 状态：**Tier 1 收口** —— S8 ✅（E1/E2/E3 关闭、`test_metrics_have_producers` 绿、
+B4 前半 16 条轨迹人工核对退出码 0）· S9 ✅ **B1 达成**（24 题 × 3 次 fake 全批 `pass@1=20/24`、退出码 0、基线入库）·
+S10 ◐ **B2 完成一半**（12 条 fake 判据全绿；真端点那半条 2026-09-22 被 `HTTP 429` 打断，无结论，§3.3.3）·
+S11 ◐ **B3 未达成**（机制层 7/7 绿、因果层轮数 0%：一次有效的证伪，§3.4.2）·
+S12 ⛔ **动手前就被自己的数据砍进 Tier 3**（可并行的只读轮只值 0.011% 墙钟，§3.5.1）· **下一步 S13**（`ExecutionBackend` + durable + `MEMORY_DIR`，B6）
 基线：`main @ 6a73e32`（v1.0 已交付并推送 `magickkdd/MiniClaudeCode`）
 预算：89 净工时（Tier 1/2/3 = 40+25+15 = 80h，缓冲 9h；每天 4h ≈ 22 天）· 交付物：可无人值守批跑的评测体系 + 六项能力升级 + 回归基线
 关系：本文只写**增量**。SPEC v1.0 未被本文推翻的条款全部继续有效；两处勘误见 §0.3。
@@ -95,7 +98,7 @@ v2 的每一项与模型交互的设计都取决于这些事实。共 12 次请�
 | 11 | Code Agent 能力 | ★★★☆☆（明显增长） | ● | 增量：任务集换成含真实开源仓库、覆盖跨文件/多阶段 | B1 |
 | 12 | Prompt Engineering | ★★★☆☆ | ● | 增量：结构化压缩摘要提示、工具描述 A/B | B1（提示改动必须有 delta） |
 | 13 | **Debugging / Observability / Trace** | ★★★☆☆（工程热点） | ◐ | **主线**：span 化、失败模式分类学、`mcc trace` 诊断工具 · S8 | **B4** |
-| 14 | **异步编程 / 并发** | ★★★☆☆（Agent Infra 需要） | ○ | **主线**：只读工具并发 + 权限门串行化 + 竞争写点分析 · S12 | **B5** |
+| 14 | **异步编程 / 并发** | ★★★☆☆（Agent Infra 需要） | ○ | 只读工具并发**测过之后砍掉**（§3.5.1：可省 162ms = live 墙钟的 0.011%）。留下的并发证据是「为什么不并」的量化，以及 D15/D16 那两条线程池 vs asyncio 的边界分析 · S12 → Tier 3 | **B5**（未排期，线不重述） |
 | 15 | RL / RLHF | ★★★☆☆（加分） | ○ | 不训练；交付 trajectory exporter + SBS 标注闭环 · S15 | 导出条数与字段完整性 |
 | 16 | Docker/K8S/部署 | ★★☆☆☆ | ○ | `ExecutionBackend` 抽象 + Docker 实现（K8S 不做） · S13 | **B6** |
 | 17 | 分布式系统 | ★★☆☆☆ | ○ | **明确不做**（单机的并发正确性是它的最小前身） | §3.10 理由 |
@@ -141,7 +144,7 @@ B1 是 v2 的生死线，其余五条都建立在它的输出上。**v1 的 A1�
 | **B2** | 构造一个必然超预算的长任务（预算 = §3.3 拆分后的 `TOKEN_BUDGET=32000`；**v1 最长轨迹只有 12,185，所以这条必须新造任务，不能拿现有 demo 充数**）：压缩关闭时失败，开启时成功 | 压缩后发出 **0 次**因配对破损导致的 400（`test_compact_preserves_pairing` + 真实端点各 5 次）；摘要里必须能 grep 到本轮已改文件名 |
 | **B3** | 同一任务集，`RepoMap on` vs `off` 的配对比较 | A1 类任务 `steps_to_success` 中位数下降 **≥ 20%**，且 `context_peak` p95 上升 **≤ 15%**（map 自身字符计入估算）；两条同时成立才算数 → **实到 2026-09-22：未达成。第二句 ✓（+5.4%），第一句 ✗（6.0→6.0，降 0%）。36 次真模型运行、机制层 7/7 全绿，所以结论是"效应不存在"而不是"实验没做成"；线不动，重测计划见 §7.3-5。全表与逐题配对见 §3.4.2** |
 | **B4** | 给 3 条真实失败轨迹，`mcc trace` 说清失败模式 | 输出的模式标签与人工判读一致（人工核对表进仓库）；渲染耗时 < 60s |
-| **B5** | 只读并发不改变语义 | 墙钟 p50 下降 **≥ 15%**；**零**次"同一 ASK 问两遍或漏问"；回填顺序与 `tool_calls` 声明顺序逐位一致（测试钉）；trace 无交错坏行 |
+| **B5** | 只读并发不改变语义 | 墙钟 p50 下降 **≥ 15%**；**零**次"同一 ASK 问两遍或漏问"；回填顺序与 `tool_calls` 声明顺序逐位一致（测试钉）；trace 无交错坏行 → **实到 2026-09-22：未排期。** 动手前先测（§3.5.1）：46 次 live 运行、261 个工具轮，按线程池无限大的上界只值 **162ms = 运行墙钟的 0.011%（p50 0.009%）**，与 15% 差三个数量级；fake 引擎（工具即 99.4% 墙钟）也只到 p50 0.127%。按 §3.5 自己的 <20% 砍单条款推入 Tier 3，**线保持原样不重述** |
 | **B6** | 同一任务在 local 与 docker backend 上判定一致 | 两后端各跑同一子集，`verdict` 与 `Check` 列表完全一致；docker 不可用时**明确降级并在报表标注**，不许静默换后端 |
 
 ## 1.4 决策记录（做了什么选择、放弃了什么）
@@ -794,9 +797,37 @@ def parallelizable(call, decision) -> bool:
 | `self.todos` 变更（`write_todos`） | `loop.py:269` | `write_todos` 列入 `SERIAL_TOOLS` |
 | `Workspace` | `workspace.py` | frozen dataclass 且方法无状态 → 只读安全，无需改动 |
 
-**收益先测再改**：S8 的 trace 新增 `parallelizable_in_round`（本轮可并行的调用数）。先在真实轨迹上统计分布，**若可并行轮占比 < 20%，把 S12 整段推到 Tier 3**，因为那说明模型很少一次发多个只读调用 —— 这时候并发的正确性成本换不到收益。这条判断由 S9 的数据做，不由我做。
+**收益先测再改**：§3.5 原本写"S8 的 trace 新增 `parallelizable_in_round`，先在真实轨迹上统计分布，**若可并行轮占比 < 20% 把 S12 整段推到 Tier 3**，这条判断由 S9 的数据做，不由我做"。
 
-> **S11 时核对的缺口**：`parallelizable_in_round` 这个字段 S8 并没有实现（`grep -rn parallelizable src/` 为空，`tests/schema_v2.json` 里也没有）。所以这道数据闸**不会**由一个现成的计数列交付，只能从 `llm_response.blocks` 里的 `tool_use` 个数反推 —— 反推规则（哪些调用算"可并行"）必须与将来 `parallelizable()` 的实现同源，否则闸本身就不是同一把尺。见 §7.2 行 12 的前置任务。
+> **S11 时核对的缺口**：`parallelizable_in_round` 这个字段 S8 并没有实现（`grep -rn parallelizable src/` 为空，`tests/schema_v2.json` 里也没有）。S12-a 决定**不补这个字段**：这道闸的价值恰恰在于它是从 `tool_call` 的 `turn`/`name`/`risk`/`latency` **独立反推**出来的，如果让调度器自己上报"这轮我并行了几个"，闸就成了被考核者自己填的表 —— 一个 `parallelizable()` 里的 bug 会同时污染分子和判据。字段与调度器一起留在 Tier 3，真要开工时同日落地。
+
+### 3.5.1 S12-a 实测：两道闸都不站在 S12 这边（`scripts/probe_parallel_share.py` → `eval/results/s12-parallel-share.json`）
+
+样本 46 次 live 运行（`b3-ab` 两臂 + S9 冒烟 + 4 个 demo）+ 72 次 fake 运行，共 261 个"执行过工具的轮"（live 口径）。可省时间按**线程池无限大**算：每个可并行轮 `Σlatency − max(latency)`，这是对本提案最有利的假设。
+
+| 闸 | 线 | 实测 | 结论 |
+|---|---|---|---|
+| ① 可并行轮占比 | ≥20% | 合计 **21.5%**（56/261）；最新的一层 b3-live 单独看 **19.8%**（41/207） | 卡在线本身上：一层过、一层不过，差 1 个轮 |
+| ② 墙钟 p50（B5 的话） | 降 ≥15% | live：可省 **162ms / 1,489,447ms** 运行墙钟 = **0.011%**（p50 0.009%） | **差三个数量级**，与实现质量无关 |
+
+为什么 ① 过了也没用 —— 拆开看时间都花在哪：
+
+| 来源 | 运行墙钟 | 工具占 | LLM 占 | 可省上界 | 占工具时间 | 占运行时间（p50） |
+|---|---|---|---|---|---|---|
+| b3-live（36 次） | 1,118,331ms | 10.51% | 89.2% | 120.0ms | 0.102% | 0.009% |
+| earlier-live（6） | 169,598ms | 7.22% | 92.7% | 23.0ms | 0.188% | 0.017% |
+| demo-live（4） | 201,518ms | 6.46% | 93.5% | 19.0ms | 0.146% | 0.011% |
+| fake（72，工具即全部） | 129,427ms | **99.37%** | ≈0 | 231.0ms | 0.180% | 0.127% |
+
+三点读法：
+
+1. **LLM 延迟占 live 墙钟的九成**，而它不在调度器的管辖范围里。把只读调用并到极限，动的只是那 6~10% 里的一小部分。
+2. **可并行轮的内容几乎全是 `read_file` 叠加**：56 个可并行轮里 54 个是 2~7 个 `read_file` 的组合，只有 2 个掺了 `find_files`，一个 `search_text` 都没有。单次读盘 1~3ms —— 省下来的串行次数是真的（56 轮 × 平均每轮 2.9ms），但那是 162 毫秒，不是 15%。
+3. **fake 引擎不是逃生口**：那里 LLM 瞬时、工具即 99.4% 的墙钟，看起来终于"轮到并发说话"，实测也只省到 p50 0.127%。拿 fake 的 p50 给 B5 签字会是最容易犯的一种自欺 —— 因为分母被换成了"没有模型的世界"。
+
+**决定**：S12 的调度器改造按 §3.5 自己写的砍单条款推入 Tier 3（§7.3 第 6 项），Tier 2 交付物改为只剩 B6。**B5 不重述、不改线**：它现在的 15% 是照着"读盘很贵"的成本模型写的，而本项目的真实成本模型是"模型很慢、读盘很快"。谁要复活 B5，先要拿出一条**换了也说得通**的前提（网络盘 / 单文件几十 MB 的读、或把 `run_tests` 与模型下一轮重叠 —— 那已经不是 §3.5 的范围），而不是把 15% 改成 0.01%。
+
+不变的是那三条正确性约束本身，它们仍然有效，只是目前没有需要被它们约束的代码：`gate.check()` 一律在进线程池之前串行完成（D16）、结果序列与 `tool_calls` 声明顺序逐位一致、`write_todos` 永不并行。`loop.py:_run_tools()` 的注释继续写着"刻意不并发"，并且现在有数据支撑这句话。
 
 ## 3.6 ExecutionBackend — 沙箱与 Durable 会话（S13，10h · **B6**）
 
@@ -989,7 +1020,7 @@ class LocalBackend / DockerBackend / ExecutionBackend(Protocol)
 | `REPO_MAP` | `1` | **S11 实到新增**（规格里只有下面那个预算项）。`0` = 不画符号地图，system 退回 v1 的 30 行目录树 —— B3 的对照组只有这一个开关，命令行 `mcc eval --no-repo-map` |
 | `REPO_MAP_TOKENS` | `1500` | ~~`0` = 关闭~~ → **S11 as-built：纯预算，至少 1**。`<1` 在 `config.from_env` / CLI / `EvalRunner` 三处各自拒绝，关闭只走 `REPO_MAP=0`（原因见 §3.4.1-5：对照组必须只有一个来源） |
 | `MEMORY_DIR` | `.mcc` | 工作记忆目录（自动进 `IGNORED_DIRS`） |
-| `MAX_PARALLEL_READS` | `1` | **默认 1 = 不并发**，显式设 >1 才启用（B5 由 A/B 决定默认值） |
+| `MAX_PARALLEL_READS` | `1` | **未落地**（S12 推 Tier 3，§3.5.1）。规划语义不变：默认 1 = 不并发，显式设 >1 才启用，B5 由 A/B 决定默认值。`config.py` 里没有这个键，读环境变量时也不接受它 —— 静默接受一个不生效的旋钮比缺这个旋钮更糟 |
 | `EXECUTION_BACKEND` | `local` | `local` / `docker` / `auto` |
 | `SNAPSHOT_ENABLED` | `1` | shadow git 检查点 |
 | `MCP_SERVERS` | 空 | JSON 数组，见 `MCPServerSpec` |
@@ -1017,7 +1048,7 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 | trace 契约 | `test_metrics_have_producers`（孤儿指标检测）、`test_trace_schema_snapshot`（字段快照比对） | 3 |
 | 压缩 | `test_compact_preserves_pairing`（随机历史 + fuzz）、`test_elide_keeps_tool_messages`、`test_summary_contains_changed_files`、`test_l2_uses_one_extra_call` | 8 |
 | RepoMap | `test_map_within_token_cap`、`test_map_invalidates_on_edit`、`test_map_skips_memory_dir`（`.mcc` 不得出现在地图里）、`test_map_entry_explains_inclusion` | 6 |
-| 并发 | `test_results_order_matches_declaration`、`test_ask_is_serialized`（假确认器计数）、`test_write_tools_never_parallel`、`test_state_counts_after_reorder`、`test_trace_lines_not_interleaved` | 7 |
+| 并发 | **未落地**（随 S12 推 Tier 3）：`test_results_order_matches_declaration`、`test_ask_is_serialized`（假确认器计数）、`test_write_tools_never_parallel`、`test_state_counts_after_reorder`、`test_trace_lines_not_interleaved`。今天真正在钉的是它们的反面 —— `_run_tools()` 单循环、结果顺序即声明顺序（`test_loop_with_fake_llm.py` 的全量回填与顺序那组） | (7) |
 | 后端 | `test_backend_unavailable_degrades_explicitly`、`test_snapshot_restore_roundtrip`、`test_resume_rejects_unpaired_snapshot`、`test_resume_does_not_replay_writes` | 8 |
 | eval | `test_metrics_recompute_from_trace`（报表数字必须能从 trace 重算出来）、`test_resume_skips_completed_runs`、`test_taskset_sha_detects_tampering`、`test_judges_never_read_result_text`（v1 那条检测器的推广） | 9 |
 | MCP/Skills | `test_remote_tool_default_execute_risk`、`test_name_collision_rejected`、`test_skill_lazy_load_costs` | 6 |
@@ -1036,7 +1067,7 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 | `RepoMap.build`（全量，<2000 文件） | ≤ 800 ms，且只在建图与失效时；命中缓存 ≤ 5 ms | 0 |
 | `compact(L1)` | ≤ 20 ms | 0 |
 | `compact(L2)` | ≤ 20 ms | **1（必须计入 usage 与报表）** |
-| 并发调度（线程池开销） | ≤ 2 ms/轮 | 0 |
+| 并发调度（线程池开销） | ≤ 2 ms/轮 | **0 —— 未落地**（S12 推 Tier 3，§3.5.1）。这条预算连同它要防的对手一起没了：实测一个可并行的只读轮平均只值 2.9ms |
 | `backend.snapshot()` | ≤ 150 ms（shadow git 小仓库） | 0 |
 | `failure` 分类（收尾一次） | ≤ 50 ms | 0 |
 
@@ -1096,7 +1127,7 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 
 | Stage | 内容 | 工时 | 退出标准 |
 |---|---|---:|---|
-| **12** | §3.5 只读并发（先由 S8 数据确认可并行轮占比） | 5h | **B5**；7 项并发测试绿；若可并行轮 <20% 则整段推 Tier 3 |
+| ~~**12**~~ ⛔ | §3.5 只读并发（先由数据确认可并行轮占比） | 5h → **实际投入约 1h 测量后砍** | **B5**；7 项并发测试绿；若可并行轮 <20% 则整段推 Tier 3 → **实到（2026-09-22，`eval/results/s12-parallel-share.json`）**：轮占比合计 21.5% 过线、最新一层 b3-live 单独看 19.8% 差一线；第二道闸（B5 的墙钟 p50）实测上限 **0.011%**，与 15% 差三个数量级，fake 引擎也仅 0.127% → **整段推 Tier 3**，Tier 2 交付物改为只剩 B6。测法与读法见 §3.5.1 |
 | **13** | §3.6 `ExecutionBackend` + Docker + 快照/`/undo` + durable resume | 10h | **B6**；`mcc resume` 杀掉进程后续跑且不重放写操作 |
 | **14** | §3.7 MCP bridge + Skills | 6h | 接一个真实 MCP server 跑通，6 项安全测试绿 |
 | — | A1 换成真实开源仓库（网络解禁后）+ 任务集扩到 30 | 4h | B1 在真仓库子集上重跑 |
@@ -1108,10 +1139,11 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 3. OTLP 导出器（3h）—— 字段已在 S8 对齐，这一步只有翻译
 4. 弱/强模型对照实验（4h）—— "弱模型 + 好架构 vs 强模型 + 糙架构"，v1 §7.3 许的愿，现在有了跑批能力才真的能还
 5. **B3 的重测：换考卷而不是换线（4h）** —— S11 把 B3 证伪在 A1 形状上（§3.4.2：地图 +5.4% 峰值、0% 轮数下降）。要判断"符号地图到底有没有用"，需要的是**跨 ≥5 文件的改动题**与**陌生大仓库的只读问答**这两类形状，而现有 24 题里没有。额度按 36 次 ≈ 126 万 tokens 的那次实到估：换考卷重测一次 ≈ 再花一倍。排在 Tier 3 而不是立刻做，因为先要把题做出来（S13 之后有 durable 会话才跑得起长题）。
+6. **B5 的复活条件（0h 决定 / 5h 实现）** —— S12 在 2026-09-22 被 §3.5.1 的数据砍到这里：可并行的只读轮平均只值 2.9ms，线程池无限大也只省 0.011% 的墙钟。它要重新成立，前提得换成**读取本身很贵**的任务形状（网络盘 / 单文件几十 MB / 一次读十几个跨仓库依赖），或者把并发对象从 READ 换成"`run_tests` 与模型下一轮重叠"（那已经不是 §3.5 的范围，是新的正确性问题）。**不做的事**：把 B5 的 15% 改成能过的数，或者拿 fake 引擎的 p50 签字 —— 那里的 LLM 是瞬时的，分母换成了"没有模型的世界"。
 
 ## 7.4 超时砍单顺位（现在就定）
 
-1. Tier 3 全部（1+2+3+4）
+1. Tier 3 全部（1+2+3+4+5+6）—— 第 6 项（B5/S12）不是"等着被砍"，它已经在 2026-09-22 被 §3.5.1 的数据主动砍进这里了
 2. `mcp` bridge 的 stdio 之外的传输方式
 3. Docker 后端（保留 `ExecutionBackend` 抽象与 local 实现 —— 抽象是设计证据，实现可砍）
 4. `compact` 的 L2（保留 L1 —— 它零风险、零额外调用，收益占大头）
