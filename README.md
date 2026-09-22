@@ -2,7 +2,7 @@
 
 一个跑在终端里的软件工程 Agent：你用自然语言下达开发任务，它自己读代码、改文件、跑命令、看测试结果，反复直到做完或者明确说清楚它卡在哪。
 
-它不是一个"调 API 的 demo 骨架"，而是一套**可验证闭环**：核心循环、权限边界、工具层、会话轨迹、评测证据，每一层都有测试或独立判据撑着。项目按 [`SPEC.md`](SPEC.md) 与 [`SPEC-v2.md`](SPEC-v2.md) 逐阶段实现，SPEC 的决策记录（v1 的 D1–D8、v2 的 D9–D26）解释了每个取舍的原因。
+它不是一个"调 API 的 demo 骨架"，而是一套**可验证闭环**：核心循环、权限边界、工具层、会话轨迹、评测证据，每一层都有测试或独立判据撑着。项目按 [`SPEC.md`](SPEC.md) 与 [`SPEC-v2.md`](SPEC-v2.md) 逐阶段实现，SPEC 的决策记录（v1 的 D1–D8、v2 的 D9–D27）解释了每个取舍的原因。
 
 下面这段是 `demos/results/codegen.fake.md` 里的真实终端输出（Demo 1，任务只有一句话："创建一个 Python 计算器项目，并编写测试"）：
 
@@ -23,7 +23,7 @@
 
 注意最后那句自我更正：**优先级 bug 是测试抓出来的，不是模型看出来的**。这就是 `run_tests` 作为判据而不是装饰的意义。
 
-当前状态：**680 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2 的 fake 侧**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，12 条判据与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)；真实端点那 5 次今天签不了字 —— 试跑被 `HTTP 429`（免费档速率限制）打断，过程与一个已修的 `--only` bug 记在 [`eval/results/b2-live-blocked.json`](eval/results/b2-live-blocked.json)，所以这一条验收线只算完成一半；S11 交付了仓库符号地图与 `.mcc/` 工作记忆（见 §4.8）：两臂只差 `--no-repo-map` 一个开关，7 条机制判据（地图**换掉**目录树、地图计入 `context_peak`、零额外 LLM 调用、两臂 system 不同）离线全绿；真实模型那半条跑完了，结论是 **B3 未达成** —— token 侧 ✓（`context_peak` p95 涨幅 +5.4%，线是 ≤15%），轮数侧 ✗（`steps_to_success` 中位 6.0 → 6.0，降幅 0%，线是 ≥20%），通过数还从 14/18 掉到 13/18。这是一次有效的证伪而不是无效实验（脚本先证明了配对成立），20% 这条线保持原样，重测计划记在 SPEC §7.3-5，全部数字见 [`eval/results/b3-repomap-ab.json`](eval/results/b3-repomap-ab.json)。 S12（只读工具并发）在动手前被自己的数据闸砍进 Tier 3：可并行的只读轮只值 live 墙钟的 0.011%（§4.9）。S13 交付了执行后端：`ExecutionBackend` 两实现（local / docker）+ 影子 git 检查点 + `mcc resume` 的幂等续跑，**B6 达成** —— 同一批题在两后端上判定逐格一致 12/12，8 条前提全绿，而这台机器上没有 docker，所以那半条线是被一个"会真的在宿主上执行命令"的假 docker 证掉的，`container_isolation_tested: false` 就是这句话（§4.10、[`eval/results/b6-backend-ab.json`](eval/results/b6-backend-ab.json)）。S14 交付了第三方能力：`ext/mcp.py`（stdio 桥、`mcp__` 命名空间、远端自报风险一律不信）与 `ext/skills.py`（常驻只有目录、正文按需展开），§3.7 的 6 项安全测试扩到 85 项，证据脚本 **20/20 条前提全绿**、对手是"自写的敌意服务 + 官方 SDK 服务"两个（§4.11、[`eval/results/s14-mcp-skills.json`](eval/results/s14-mcp-skills.json)）；LangGraph 那一半交付的是 ≤200 行的概念对照与不用它的理由（[`docs/framework-equivalence.md`](docs/framework-equivalence.md)）。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
+当前状态：**680 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2 的 fake 侧**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，12 条判据与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)；真实端点那 5 次今天签不了字 —— 试跑被 `HTTP 429`（免费档速率限制）打断，过程与一个已修的 `--only` bug 记在 [`eval/results/b2-live-blocked.json`](eval/results/b2-live-blocked.json)，所以这一条验收线只算完成一半；S11 交付了仓库符号地图与 `.mcc/` 工作记忆（见 §4.8）：两臂只差 `--no-repo-map` 一个开关，7 条机制判据（地图**换掉**目录树、地图计入 `context_peak`、零额外 LLM 调用、两臂 system 不同）离线全绿；真实模型那半条跑完了，结论是 **B3 未达成** —— token 侧 ✓（`context_peak` p95 涨幅 +5.4%，线是 ≤15%），轮数侧 ✗（`steps_to_success` 中位 6.0 → 6.0，降幅 0%，线是 ≥20%），通过数还从 14/18 掉到 13/18。这是一次有效的证伪而不是无效实验（脚本先证明了配对成立），20% 这条线保持原样，重测计划记在 SPEC §7.3-5，全部数字见 [`eval/results/b3-repomap-ab.json`](eval/results/b3-repomap-ab.json)。 S12（只读工具并发）在动手前被自己的数据闸砍进 Tier 3：可并行的只读轮只值 live 墙钟的 0.011%（§4.9）。S13 交付了执行后端：`ExecutionBackend` 两实现（local / docker）+ 影子 git 检查点 + `mcc resume` 的幂等续跑，**B6 达成** —— 同一批题在两后端上判定逐格一致 12/12，8 条前提全绿，而这台机器上没有 docker，所以那半条线是被一个"会真的在宿主上执行命令"的假 docker 证掉的，`container_isolation_tested: false` 就是这句话（§4.10、[`eval/results/b6-backend-ab.json`](eval/results/b6-backend-ab.json)）。S14 交付了第三方能力：`ext/mcp.py`（stdio 桥、`mcp__` 命名空间、远端自报风险一律不信）与 `ext/skills.py`（常驻只有目录、正文按需展开），§3.7 的 6 项安全测试扩到 85 项，证据脚本 **20/20 条前提全绿**、对手是"自写的敌意服务 + 官方 SDK 服务"两个（§4.11、[`eval/results/s14-mcp-skills.json`](eval/results/s14-mcp-skills.json)）；LangGraph 那一半交付的是 ≤200 行的概念对照与不用它的理由（[`docs/framework-equivalence.md`](docs/framework-equivalence.md)）。S15-a 是多 Agent 那一格的**第二次动手前砍单**：`spawn_agent` 的前置条件（D21「未收尾/自我确认过早占比 > 20%」）被 `scripts/probe_verifier_gate.py` 在 75 次 live 运行上量成 **1/75 = 1.3%**（D21 点名的 B1 fake 批自己也只有 12/72 = 16.7%），12 条前提全绿、verdict=cut，S15 交付物改为只剩 §3.9 的轨迹导出器；测量顺带钉出两处口径缺陷 —— 分子记的是行为不是代价（命中的 run 全部判 pass），以及 §3.8 那句"200 行 pytest 输出"在盘上只出现在模型**绕开** `run_tests` 用 `bash` 直跑 pytest 的那 2 次（结构化那条路 95 次调用单次最大 4,263 字符）（§4.12、[`eval/results/s15-verifier-gate.json`](eval/results/s15-verifier-gate.json)）。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
 
 ---
 
@@ -396,6 +396,25 @@ MCP_SERVERS='[{"name":"fx","endpoint":"python","args":["server.py"],"env":["TOKE
 
 **这条线没测到的是**：真第三方生态服务（只有自己的两个）、HTTP/SSE 传输（按 §7.4 顺位 2 砍到 Tier 3）、技能自带脚本（D20 明确不做），以及"模型会不会主动去 `load_skill`"—— fake 引擎里取技能是剧本写好的，真实分布要看 live。
 
+### 4.12 为什么没有多 Agent：第二次数值上的砍单（S15-a → Tier 3）
+
+SPEC v2 §3.8 给多 Agent 留的口子极窄：不做 planner/worker/critic 三件套，只做一种形态 —— `spawn_agent` 派一个**独立上下文**的子 agent 去跑测试，父 agent 只收"失败用例名 + 精简原因"。而 §7.3-1 给这条写了前置条件：**只在 B1 的失败分布支持时做**（D21 那条线：`no_verification` + `self_confirm` 合计 > 20%）。S15-a 因此先写探针再决定动不动手（`scripts/probe_verifier_gate.py`，一行调度代码都没写）。
+
+| 闸 | 线 | 实测 |
+|---|---|---|
+| ① 占比（全部 run 分母，签字用这个） | > 20% | live **1/75 = 1.3%** |
+| ① 占比（只看判 fail 的 run） | > 20% | live **0/32 = 0.0%** |
+| ① D21 点名的那份数据（B1 fake 批） | > 20% | 它自己 **12/72 = 16.7%** —— 也不过线 |
+| ② §3.8 那句"200 行 pytest 输出"（折成 14,000 字符） | 验证输出值不值得隔离 | 验证类输出占工具总字符 **41.6%**（每格中位 20.7%）→ 贵；但 148 次验证调用里只有 **2 次**越过那条线 |
+
+三道都不支持动手，**连 D21 自己点名的那份数据都不支持**。但这次测量真正的收获在口径上，三条都是先不钉住就会得出相反结论的地方：
+
+1. **分母没写**。D21 只写"占比"。同一份 fake 数据在两个分母下是 16.7% 与 0.0%，差一个数量级 —— 哪个都不容疑就签字，是在用读表人的默认值做架构决策。
+2. **分子记的是行为，不是代价**。`self_confirm` 的判据是"宣告完成时最后一次验证是红的"。把命中的 run 单独对一遍判据结论：live `{'pass': 1}`、fake `{'pass': 12}`，**一份都没判负**。而 verifier 能救的只有"因此把任务做砸"那部分 —— 这条线即使过了，它数出来的也不是要买的东西。反方向也测了：判据放宽成"中途见过红 + 最后宣告完成"，占比立刻 35/75 = **46.7%** 过线，可那个数没意义，正常调试本来就会红几次再改绿。
+3. **"200 行"有产地，但产地不是我们的设计**。结构化那条路（`run_tests` 自己数通过/失败、只留失败用例名）95 次调用**单次最大 4,263 字符、0 次过线**；两次过线的（28,062 与 17,352 字符）全部是模型用 `bash` 直接跑 `python -m pytest -v`，**绕开**了我们自己已经精简过的那条路。所以"验证输出没被隔离"的正确修法在提示词与工具描述，不在再加一层上下文 —— 而"验证很贵"（41.6%）与"隔离不划算"两句同时成立的原因，是贵的是**累计**、隔离只能按**单次**省。
+
+**决定**：`spawn_agent` 连同 §3.8 那三条约束（不得绕过权限门、token 预算计入父、子轨迹独立 session 可展开成树）一起留在 Tier 3，S15 交付物改为只剩 §3.9 的轨迹导出器。**D21 的 20% 不改**：它的错不是数字太大，是分母没写、分子没接代价，这两处现在都被实测钉住了（SPEC §3.8.1 末尾给了三条重评触发条件）。与 §4.9 同一条纪律的第二次应用 —— 而且这次的结论比 S12 更值得说：**两次砍单主要收益都不是省下的工时，是发现判据本身写错了的地方**。一个不动手的探针没有这个副作用。
+
 ---
 
 ## 5. 工具清单
@@ -619,6 +638,7 @@ python scripts/b3_repomap_ab.py    # B3 两臂 A/B：机制判据离线核，因
 python scripts/probe_parallel_share.py  # S12 的数据闸：盘上轨迹里可并行的轮占多少、值多少毫秒（§4.9）
 python scripts/b6_backend_ab.py    # B6 两臂 A/B：docker 臂降级时不产出一致率、直接退 1（§4.10）
 python scripts/s14_ext_demo.py     # §3.7 的 20 条前提：对着两个 MCP 对手量桥与技能（§4.11）
+python scripts/probe_verifier_gate.py  # S15-a 的数据闸：D21 那道 20% 在盘上支持吗（§4.12）
 mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 ```
 
@@ -672,6 +692,7 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 - **压缩只到 L2，且它的收益只在 fake 引擎上量化过。** L1 省略工具输出、L2 结构化摘要都已上线并跑通 B2 的 A/B（§4.7），但"压缩后 agent 有没有静默变笨"这件事的真实分布要靠 live 臂：`scripts/b2_compact_ab.py --live`（真实端点 5 次、成功率 ≥60%）**跑过但没跑出结论** —— 端点回 `HTTP 429`（免费档速率限制），42 次运行里 28 次 `llm_failure`，所以 B2 只算完成一半，等额度窗口恢复重跑（`eval/results/b2-live-blocked.json` 记了过程与新命令的预估开销）。另外 `write_file` 的 content 进的是 assistant 消息，L1 碰不到它 —— 写得很长的会话只能靠 L2 那次付费调用救。
 - **符号地图只认 Python、只认 `ast` 能看出来的东西。** 装饰器背后的动态注册、`__all__` 之外的字符串路由、yaml/toml 里的符号都看不见；`REPO_MAP=0` 时退回的仍是那棵固定 30 行、广度优先的目录树，深目录尾部一样要靠模型自己 `find_files`。跨进程缓存命中实测 27.9~99.4ms（最后一次 36.8ms），没达到 SPEC §6.2 的 ≤5ms 那条线 —— 同实例的进程内 memo 是 4.0~9.4ms，那条达标（原因与口径见 `eval/results/b3-repomap-ab.json` 的 `amendments`）。
 - **只读工具并发没做（SPEC v2 的 S12 被数据砍进 Tier 3）。** 不是遗漏：可并行的轮里平均只值 2.9 毫秒，线程池开到无限大也只省 live 墙钟的 0.011%（§4.9）。所以 `_run_tools()` 仍是单循环、结果顺序即声明顺序，`MAX_PARALLEL_READS` 这个旋钮在 `config.py` 里根本不存在 —— 不生效的配置项比缺失的配置项更坏。
+- **多 Agent 一种形态也没做（S15-a 同样被数据砍进 Tier 3）。** 也不是遗漏：D21 那条"未收尾/自我确认过早占比 > 20%"在 75 次 live 运行上量出来是 **1.3%**，连它点名的 B1 fake 批自己也只有 16.7%（§4.12）。要留意的是这条局限的**性质**：`spawn_agent` 的三条约束（不绕权限门、预算计入父、子轨迹可展开成树）写在 SPEC 里但没有代码执行它们 —— 与并发那三条不变式同一个处理方式，设计留着、空壳不留。
 - **`DockerBackend` 的真实容器路径一次也没跑过。** 这台机器上没有 docker，B6 是用一个**会真的在宿主上执行命令**的假 `docker` 替身跑出来的：被证明的是命令行构造、降级不静默、两臂判定一致（12/12）与 rev 共用，**没被证明的是文件隔离、网络隔离、镜像内容**（`eval/results/b6-backend-ab.json` 里 `container_isolation_tested: false`）。所以"这个 agent 能在沙箱里跑"目前是**接口层的事实**，不是运行时的事实；真 docker 到位后原样重跑 `scripts/b6_backend_ab.py` 才算补上。附带一条：`docker run --rm` 每条命令付一次容器启动，本项目里命令只占墙钟 6~10%，延迟付得起，但这笔交换在评测语义上值不值，替身答不了。
 - **MCP 只测了 stdio，两个对手都是自己的进程。** §4.11 那 20 条前提证明的是命名空间隔离、风险不自报、出门前校验、env 白名单、降级不静默与被拒无副作用 —— 对手一个是自写的敌意 fixture、一个是用官方 `FastMCP` 写的正常服务，**没有连过任何一个真第三方服务**（连不上是网络策略，不是机制缺口，但结论因此只到"我们的客户端按协议办事"这一层）。HTTP/SSE 传输按 SPEC §7.4 顺位 2 砍进 Tier 3；技能自带的脚本明确不读不执行（D20），所以"技能=提示词包"是能力上限而不是待办。另外"模型会不会**主动**去 `load_skill`"没测：fake 引擎里那次取用是剧本写好的，真实分布要看 live。
 - **框架对照是文档，不是移植层。** `docs/framework-equivalence.md` 说明了我们与 LangGraph 的概念对应关系和缺的东西（`Send` 动态分发、`get_state_history` 的任意回溯），但**没有**实现它的接口 —— 迁移表里三处硬冲突（权限默认值、幂等台账、度量产地）是"真要换需要先解的结"，不是"已经兼容"。
@@ -766,7 +787,7 @@ mini-claude-code/
 │   ├── baselines/              `fake-<题集哈希>.json` —— B1 的基线，进版本库
 │   ├── results/                验收线的证据文件（b2/b3 的 A/B 判据、live 冒烟报表；数字不可复现所以入库）
 │   └── .work/                  工作副本与逐条记录（忽略，报表与基线才提交）
-├── scripts/                    probe_caps / probe_window / probe_parallel_share / b4_label_check / b2_compact_ab / b3_repomap_ab / b6_backend_ab / s14_ext_demo 等证据生成器
+├── scripts/                    probe_caps / probe_window / probe_parallel_share / probe_verifier_gate / b4_label_check / b2_compact_ab / b3_repomap_ab / b6_backend_ab / s14_ext_demo 等证据生成器
 ├── docs/
 │   └── framework-equivalence.md  LangGraph ↔ 本项目的概念对照 + 为什么不用它（D26，≤200 行）
 ├── skills/                     技能目录（一个目录一个 SKILL.md，正文按需展开）

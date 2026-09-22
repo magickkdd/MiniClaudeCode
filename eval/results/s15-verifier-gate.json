@@ -1,0 +1,526 @@
+{
+  "generated_at": "2026-09-22 23:21:05",
+  "acceptance": "S15 前置闸（D21 / §7.3-1）",
+  "spec": "§3.8 / D21",
+  "question": "给 agent 配一个独立上下文跑测试的 verifier 子 agent，D21 那条 20% 的线支持吗？",
+  "gate": {
+    "d21_label_share_line": 0.2,
+    "min_live_sample": 20,
+    "labels_counted": [
+      "no_verification",
+      "self_confirm"
+    ],
+    "share_denominators": {
+      "all_runs": "模型有 N 次『可以不验证』的机会，所以问行为频率就用全部 run",
+      "failed_runs": "问『失败里多少是这一类』才用 fail 的 run",
+      "why_both": "D21 只写了『占比』没写分母，而 fake 层两个分母差出一个数量级 —— 选哪个直接换结论"
+    }
+  },
+  "layers": {
+    "b1-fake": {
+      "engine": "fake",
+      "traces": 72,
+      "has_manifest": true,
+      "note": "B1 本批（24 题 × 3）—— D21 点名的就是这份分布，但它是**手写剧本**"
+    },
+    "b2-live": {
+      "engine": "live",
+      "traces": 29,
+      "has_manifest": true,
+      "note": "B2 的真实端点臂（压缩开着、必然超预算的长任务）"
+    },
+    "b3-live-off": {
+      "engine": "live",
+      "traces": 18,
+      "has_manifest": true,
+      "note": "B3 对照臂（无符号地图）—— 6 道 bugfix 题，最接近 D21 说的『改完没收尾』语境"
+    },
+    "b3-live-on": {
+      "engine": "live",
+      "traces": 18,
+      "has_manifest": true,
+      "note": "B3 实验臂（有符号地图），与上一臂只差一个开关"
+    },
+    "smoke-live": {
+      "engine": "live",
+      "traces": 6,
+      "has_manifest": true,
+      "note": "6 题 live 冒烟（`pass@1=4/6` 那一批）"
+    },
+    "demo-live": {
+      "engine": "live",
+      "traces": 4,
+      "has_manifest": false,
+      "note": "4 个 demo 的真实端点轨迹 —— 没有 manifest，所以它只进『全部 run』那个分母"
+    }
+  },
+  "per_layer": {
+    "b2-live": {
+      "runs": 29,
+      "runs_with_verdict": 28,
+      "failed_runs": 21,
+      "gate_labelled_runs": 1,
+      "share_of_all_runs": 0.0345,
+      "share_of_failed_runs": 0.0,
+      "share_by_recorded_labels": 0.0345,
+      "label_breakdown": {
+        "no_verification": 0,
+        "self_confirm": 1
+      },
+      "gate_hits_by_verdict": {
+        "pass": 1
+      },
+      "gate_hits_known_verdict": 1,
+      "all_modes": {
+        "self_confirm": 1
+      },
+      "verification_economics": {
+        "verify_calls": 20,
+        "verify_output_chars": 15322,
+        "total_output_chars": 68062,
+        "verify_share_of_output": 0.2251,
+        "per_run_share_median": 0.0,
+        "biggest_single_verify_p50": 751,
+        "biggest_single_verify_p95": 4263,
+        "biggest_single_verify_max": 4263,
+        "spec_200_lines_chars": 14000,
+        "p95_over_spec": 0.3045,
+        "by_tool": {
+          "bash": {
+            "calls": 9,
+            "chars": 4363,
+            "single_max": 1349,
+            "single_p95": 1349,
+            "over_spec_calls": 0
+          },
+          "run_tests": {
+            "calls": 11,
+            "chars": 10959,
+            "single_max": 4263,
+            "single_p95": 4263,
+            "over_spec_calls": 0
+          }
+        }
+      },
+      "termination_dist": {
+        "llm_failure": 18,
+        "completed": 8,
+        "context_overflow": 2,
+        "unknown": 1
+      },
+      "runs_that_saw_red": 5,
+      "runs_saw_red_and_claimed_done": 3
+    },
+    "b3-live-off": {
+      "runs": 18,
+      "runs_with_verdict": 18,
+      "failed_runs": 4,
+      "gate_labelled_runs": 0,
+      "share_of_all_runs": 0.0,
+      "share_of_failed_runs": 0.0,
+      "share_by_recorded_labels": 0.0,
+      "label_breakdown": {
+        "no_verification": 0,
+        "self_confirm": 0
+      },
+      "gate_hits_by_verdict": {},
+      "gate_hits_known_verdict": 0,
+      "all_modes": {
+        "budget_exhausted": 1
+      },
+      "verification_economics": {
+        "verify_calls": 53,
+        "verify_output_chars": 38840,
+        "total_output_chars": 109349,
+        "verify_share_of_output": 0.3552,
+        "per_run_share_median": 0.3494,
+        "biggest_single_verify_p50": 801,
+        "biggest_single_verify_p95": 2791,
+        "biggest_single_verify_max": 2791,
+        "spec_200_lines_chars": 14000,
+        "p95_over_spec": 0.1994,
+        "by_tool": {
+          "bash": {
+            "calls": 18,
+            "chars": 15784,
+            "single_max": 1998,
+            "single_p95": 1887,
+            "over_spec_calls": 0
+          },
+          "run_tests": {
+            "calls": 35,
+            "chars": 23056,
+            "single_max": 2791,
+            "single_p95": 2791,
+            "over_spec_calls": 0
+          }
+        }
+      },
+      "termination_dist": {
+        "completed": 17,
+        "max_turns": 1
+      },
+      "runs_that_saw_red": 15,
+      "runs_saw_red_and_claimed_done": 14
+    },
+    "b3-live-on": {
+      "runs": 18,
+      "runs_with_verdict": 18,
+      "failed_runs": 5,
+      "gate_labelled_runs": 0,
+      "share_of_all_runs": 0.0,
+      "share_of_failed_runs": 0.0,
+      "share_by_recorded_labels": 0.0,
+      "label_breakdown": {
+        "no_verification": 0,
+        "self_confirm": 0
+      },
+      "gate_hits_by_verdict": {},
+      "gate_hits_known_verdict": 0,
+      "all_modes": {},
+      "verification_economics": {
+        "verify_calls": 47,
+        "verify_output_chars": 30242,
+        "total_output_chars": 95650,
+        "verify_share_of_output": 0.3162,
+        "per_run_share_median": 0.3608,
+        "biggest_single_verify_p50": 766,
+        "biggest_single_verify_p95": 1998,
+        "biggest_single_verify_max": 2791,
+        "spec_200_lines_chars": 14000,
+        "p95_over_spec": 0.1427,
+        "by_tool": {
+          "bash": {
+            "calls": 9,
+            "chars": 9633,
+            "single_max": 1998,
+            "single_p95": 1998,
+            "over_spec_calls": 0
+          },
+          "run_tests": {
+            "calls": 38,
+            "chars": 20609,
+            "single_max": 2791,
+            "single_p95": 1590,
+            "over_spec_calls": 0
+          }
+        }
+      },
+      "termination_dist": {
+        "completed": 17,
+        "llm_failure": 1
+      },
+      "runs_that_saw_red": 14,
+      "runs_saw_red_and_claimed_done": 13
+    },
+    "smoke-live": {
+      "runs": 6,
+      "runs_with_verdict": 6,
+      "failed_runs": 2,
+      "gate_labelled_runs": 0,
+      "share_of_all_runs": 0.0,
+      "share_of_failed_runs": 0.0,
+      "share_by_recorded_labels": 0.0,
+      "label_breakdown": {
+        "no_verification": 0,
+        "self_confirm": 0
+      },
+      "gate_hits_by_verdict": {},
+      "gate_hits_known_verdict": 0,
+      "all_modes": {
+        "context_growth": 1
+      },
+      "verification_economics": {
+        "verify_calls": 13,
+        "verify_output_chars": 52317,
+        "total_output_chars": 73011,
+        "verify_share_of_output": 0.7166,
+        "per_run_share_median": 0.0554,
+        "biggest_single_verify_p50": 2019,
+        "biggest_single_verify_p95": 28062,
+        "biggest_single_verify_max": 28062,
+        "spec_200_lines_chars": 14000,
+        "p95_over_spec": 2.0044,
+        "by_tool": {
+          "bash": {
+            "calls": 7,
+            "chars": 51223,
+            "single_max": 28062,
+            "single_p95": 28062,
+            "over_spec_calls": 2
+          },
+          "run_tests": {
+            "calls": 6,
+            "chars": 1094,
+            "single_max": 858,
+            "single_p95": 858,
+            "over_spec_calls": 0
+          }
+        }
+      },
+      "termination_dist": {
+        "completed": 6
+      },
+      "runs_that_saw_red": 2,
+      "runs_saw_red_and_claimed_done": 2
+    },
+    "demo-live": {
+      "runs": 4,
+      "runs_with_verdict": 0,
+      "failed_runs": 0,
+      "gate_labelled_runs": 0,
+      "share_of_all_runs": 0.0,
+      "share_of_failed_runs": null,
+      "share_by_recorded_labels": 0.0,
+      "label_breakdown": {
+        "no_verification": 0,
+        "self_confirm": 0
+      },
+      "gate_hits_by_verdict": {},
+      "gate_hits_known_verdict": 0,
+      "all_modes": {},
+      "verification_economics": {
+        "verify_calls": 15,
+        "verify_output_chars": 25293,
+        "total_output_chars": 42889,
+        "verify_share_of_output": 0.5897,
+        "per_run_share_median": 0.3408,
+        "biggest_single_verify_p50": 2225,
+        "biggest_single_verify_p95": 12816,
+        "biggest_single_verify_max": 12816,
+        "spec_200_lines_chars": 14000,
+        "p95_over_spec": 0.9154,
+        "by_tool": {
+          "bash": {
+            "calls": 10,
+            "chars": 24050,
+            "single_max": 12816,
+            "single_p95": 12816,
+            "over_spec_calls": 0
+          },
+          "run_tests": {
+            "calls": 5,
+            "chars": 1243,
+            "single_max": 1077,
+            "single_p95": 1077,
+            "over_spec_calls": 0
+          }
+        }
+      },
+      "termination_dist": {
+        "completed": 4
+      },
+      "runs_that_saw_red": 3,
+      "runs_saw_red_and_claimed_done": 3
+    }
+  },
+  "live_total": {
+    "runs": 75,
+    "runs_with_verdict": 70,
+    "failed_runs": 32,
+    "gate_labelled_runs": 1,
+    "share_of_all_runs": 0.0133,
+    "share_of_failed_runs": 0.0,
+    "share_by_recorded_labels": 0.0133,
+    "label_breakdown": {
+      "no_verification": 0,
+      "self_confirm": 1
+    },
+    "gate_hits_by_verdict": {
+      "pass": 1
+    },
+    "gate_hits_known_verdict": 1,
+    "all_modes": {
+      "budget_exhausted": 1,
+      "context_growth": 1,
+      "self_confirm": 1
+    },
+    "verification_economics": {
+      "verify_calls": 148,
+      "verify_output_chars": 162014,
+      "total_output_chars": 388961,
+      "verify_share_of_output": 0.4165,
+      "per_run_share_median": 0.2071,
+      "biggest_single_verify_p50": 800,
+      "biggest_single_verify_p95": 4263,
+      "biggest_single_verify_max": 28062,
+      "spec_200_lines_chars": 14000,
+      "p95_over_spec": 0.3045,
+      "by_tool": {
+        "bash": {
+          "calls": 53,
+          "chars": 105053,
+          "single_max": 28062,
+          "single_p95": 3586,
+          "over_spec_calls": 2
+        },
+        "run_tests": {
+          "calls": 95,
+          "chars": 56961,
+          "single_max": 4263,
+          "single_p95": 2007,
+          "over_spec_calls": 0
+        }
+      }
+    },
+    "termination_dist": {
+      "completed": 52,
+      "llm_failure": 19,
+      "context_overflow": 2,
+      "max_turns": 1,
+      "unknown": 1
+    },
+    "runs_that_saw_red": 39,
+    "runs_saw_red_and_claimed_done": 35
+  },
+  "fake_total": {
+    "runs": 72,
+    "runs_with_verdict": 72,
+    "failed_runs": 12,
+    "gate_labelled_runs": 12,
+    "share_of_all_runs": 0.1667,
+    "share_of_failed_runs": 0.0,
+    "share_by_recorded_labels": 0.1667,
+    "label_breakdown": {
+      "no_verification": 0,
+      "self_confirm": 12
+    },
+    "gate_hits_by_verdict": {
+      "pass": 12
+    },
+    "gate_hits_known_verdict": 12,
+    "all_modes": {
+      "self_confirm": 12,
+      "budget_exhausted": 6,
+      "path_guessing": 3,
+      "test_gaming": 3,
+      "thrashing": 3
+    },
+    "verification_economics": {
+      "verify_calls": 63,
+      "verify_output_chars": 28485,
+      "total_output_chars": 146517,
+      "verify_share_of_output": 0.1944,
+      "per_run_share_median": 0.0235,
+      "biggest_single_verify_p50": 56,
+      "biggest_single_verify_p95": 1597,
+      "biggest_single_verify_max": 1597,
+      "spec_200_lines_chars": 14000,
+      "p95_over_spec": 0.1141,
+      "by_tool": {
+        "run_tests": {
+          "calls": 63,
+          "chars": 28485,
+          "single_max": 1597,
+          "single_p95": 1258,
+          "over_spec_calls": 0
+        }
+      }
+    },
+    "termination_dist": {
+      "completed": 63,
+      "max_turns": 6,
+      "stalled": 3
+    },
+    "runs_that_saw_red": 21,
+    "runs_saw_red_and_claimed_done": 18
+  },
+  "premises": [
+    {
+      "claim": "盘上有 live 轨迹可读",
+      "ok": true,
+      "detail": "5 层 · 75 份"
+    },
+    {
+      "claim": "live 样本量够单独签「> 20%」这条线（n ≥ 20）",
+      "ok": true,
+      "detail": "n=75"
+    },
+    {
+      "claim": "每份轨迹都 replay 得出内容（没有静默的空格）",
+      "ok": true,
+      "detail": "75 份里 0 份既无轮次也无调用"
+    },
+    {
+      "claim": "重算是确定的：同一份轨迹扫两遍，标签逐格相同",
+      "ok": true,
+      "detail": "不确定的轨迹：无（分类器不读消息历史、不吃时间，所以它**不该**不确定）"
+    },
+    {
+      "claim": "『fail』这个分母有产地（来自 manifest，不是脚本自己下的判定）",
+      "ok": true,
+      "detail": "live 70/75 份对上了 manifest；demo-live 那层没 manifest，只进『全部 run』分母"
+    },
+    {
+      "claim": "换尺子不翻转闸①：当前规则 vs manifest 落盘标签，过线方向一致",
+      "ok": true,
+      "detail": "重算 0.0133 vs 落盘 0.0133 → 两侧都判「不过线」"
+    },
+    {
+      "claim": "红绿结论只有一个产地（非验证工具不带 verdict 字段）",
+      "ok": true,
+      "detail": "越界的 verdict 来自：无"
+    },
+    {
+      "claim": "闸②有东西可量：live 轨迹里真的发生过验证调用",
+      "ok": true,
+      "detail": "148 次验证调用、162014 字符输出"
+    },
+    {
+      "claim": "每一层单独看过一遍（不被大层稀释，也不被小层抬高）",
+      "ok": true,
+      "detail": "b1-fake 12/72 · b2-live 1/29 · b3-live-off 0/18 · b3-live-on 0/18 · smoke-live 0/6 · demo-live 0/4"
+    },
+    {
+      "claim": "fake 层不进签字合计（它是手写剧本，不是模型行为）",
+      "ok": true,
+      "detail": "live 75 + fake 72 = 各层之和 147；fake 那一格的占比是 0.1667，只作对照"
+    },
+    {
+      "claim": "§3.8 的『200 行输出』有产地：越过标尺的验证调用来自哪条路径",
+      "ok": true,
+      "detail": "bash 53 次/最大 28,062 字符/过线 2 次 · run_tests 95 次/最大 4,263 字符/过线 0 次"
+    },
+    {
+      "claim": "闸①的分子能对上代价：命中的 run 每一份都有判据结论可查",
+      "ok": true,
+      "detail": "live 命中 1 份，其中判据结论可查 1 份 → 分布 {'pass': 1}；fake 那格 {'pass': 12}。分子记的是『最后一步验证是红就收尾』，与『因此判负』不是一回事"
+    }
+  ],
+  "counts": {
+    "premises": 12,
+    "passed": 12,
+    "failed": 0,
+    "not_measured": 0
+  },
+  "verdict": "cut",
+  "decision": "闸①（D21 的 20%）：live 轨迹 1/75 份命中 no_verification 或 self_confirm = 1.3%（n=75）→ 不过线；只看判 fail 的 run 是 0.0%（n=32）。而且这份命中里判 pass 的有 1 份、判 fail 的 0 份 —— 分子记的是行为，不是代价。闸②（§3.8 那句『200 行 pytest 输出』= 14000 字符）：实测单次验证输出 p50 800 字符、p95 4,263 字符、最大 28,062 字符；验证输出占工具总输出的 41.6%（每格中位 20.7%）→ 验证确实贵，隔离它才划算。拆开看：过线的 2 次里，结构化 run_tests 占 0 次（它 95 次调用的最大单次输出 4,263 字符），其余 2 次来自 bash 直接跑 pytest。",
+  "what_this_proves": "真实端点跑出的 75 份轨迹上，用**当前**规则重算的 no_verification / self_confirm 频率（两个分母各一个），以及验证类输出在上下文里的真实字符占比 —— 也就是 §3.8 那条经济学理由的数量级。",
+  "what_this_does_not_prove": "没证明『加 verifier 会把失败变成成功』。那要真跑一个 verifier 才知道，而这正是这道闸要省掉的成本。另外 live 样本来自 B2/B3 那几批**为别的判据设计**的题，不是为『验证行为』抽的样；样本里 6 道题只覆盖 Python + pytest，跨语言的验证行为没测过。",
+  "amendments": [
+    {
+      "item": "D21 的『占比』",
+      "spec_said": "未收尾/自我确认过早 占比 > 20% 再回来讨论 critic",
+      "as_built": "两个分母各自算、各自出结论；签字用『全部 run』",
+      "why": "fail-only 分母天然偏高（只有失败才会被翻出来找失败原因），拿它签字几乎永远过线"
+    },
+    {
+      "item": "§3.8 的『200 行 pytest 输出』",
+      "spec_said": "跑测试并把 200 行 pytest 输出压缩成 5 行，是上下文隔离唯一明显划算的场景",
+      "as_built": "这句话在本项目有产地、但不在结构化那条路上：run_tests 的 95 次调用最大单次 4,263 字符、0 次过 14000 这条线；过线的 2 次全部是 bash 直接跑 `python -m pytest -v`（最大 28,062 字符） —— 也就是说那个『200 行』是 agent 绕开自己的结构化工具换来的，不是工具吐出来的",
+      "why": "如果隔离省下的东西本来就只出现在『已经有一条便宜替代路』的行为里，verifier 的成本收益要重算一遍：便宜的那版（把 run_tests 的输出再压一遍）省不下 200 行，而贵的那版该修的是『为什么它不用 run_tests』"
+    },
+    {
+      "item": "D21 点名的『B1 的失败分布』",
+      "spec_said": "用 B1 的失败分类复核",
+      "as_built": "B1 是 fake 批（24 题 × 3），标签由手写剧本产生；脚本把它单列成对照组，签字只用 live",
+      "why": "fake 里『改完没跑测试就收尾』是我安排的剧情 —— 拿它测模型行为是自己出题自己答（同 §3.5.1）"
+    },
+    {
+      "item": "D21 的『未收尾/自我确认过早』",
+      "spec_said": "这类失败占比 > 20% 再回来讨论 critic",
+      "as_built": "这句话读起来是『因此判负的 run 里有多少是这一类』，可 `self_confirm` 的判据是行为（termination=completed 且最后一次验证是红、之后没有绿）。盘上命中的 run live {'pass': 1}、fake {'pass': 12} —— 判负的有 0 份",
+      "why": "所以这道闸就算过了线也不自动构成做 verifier 的理由：verifier 救的是『失败的 run』，只有落在 verdict=fail 那一格的那部分才是可救的量。重评时的口径应是**条件在 fail 上**的那一版"
+    }
+  ]
+}
