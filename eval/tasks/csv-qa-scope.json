@@ -1,0 +1,27 @@
+{
+  "id": "csv-qa-scope",
+  "instruction": "只读，不要改任何文件。`tests/test_export.py` 现在是红的，README 承诺的 `describe()` 也还没实现 —— 这两件事这次各该不该做？依据写在哪个文件里？另外 `parse_amount` 要能吃下哪几种脏写法，各举一个例子。",
+  "source": { "kind": "vendored", "path": "eval/fixtures/csv-report" },
+  "answer_keywords": [
+    "test_export|write_csv|导出",
+    "known-issues|已知问题",
+    "1,200.50|千分位",
+    "€820|货币符号",
+    "describe"
+  ],
+  "mode": "readonly",
+  "expected_termination": "completed",
+  "tags": ["readonly", "scope", "doc-lookup"],
+  "max_turns": 8,
+  "token_ceiling": 60000,
+  "difficulty": 1,
+  "supports_live": true,
+  "fake": {
+    "driver": "answer",
+    "args": {
+      "read": ["README.md", "docs/known-issues.md", "report/load.py"],
+      "text": "CSV 导出这次**不该做**：`docs/known-issues.md` 写明 `report.export.write_csv` 从来没实现过，排在下个季度，不属于当前任何一次改动的范围，所以 `tests/test_export.py` 保持红的即可。该做的是同一个文件里列的第二条 —— `report/summary.py` 中抛 `NotImplementedError` 的 `describe()`，README 已经给了逐字格式。`parse_amount` 要能吃下三种脏写法：`1,200.50`（千分位）、`€820`（带货币符号）、` 430.00 `（首尾空格）。"
+    }
+  },
+  "notes": "考「先读文档再决定范围」的能力，同时是判据的负样本对照组：一个只会 `pytest` 退出码的评测器在这道题的仓库上永远报红。"
+}

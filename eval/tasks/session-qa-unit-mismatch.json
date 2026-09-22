@@ -1,0 +1,26 @@
+{
+  "id": "session-qa-unit-mismatch",
+  "instruction": "只读，不要修改任何文件。`Session('abc', ttl_minutes=30, created=0.0).remaining(600)` 现在返回多少？README 说是 1200.0，差在哪个文件的哪个方法、少做了什么换算？另外 `humanize(125)` 现在返回什么，为什么和 README 的 `2m5s` 不一样？",
+  "source": { "kind": "vendored", "path": "eval/fixtures/session-store" },
+  "answer_keywords": [
+    "expires_at",
+    "* 60|乘 60|乘以 60|60 倍",
+    "\"2m\"",
+    "提前|早退|直接返回"
+  ],
+  "mode": "readonly",
+  "expected_termination": "completed",
+  "tags": ["readonly", "explanation", "unit-confusion"],
+  "max_turns": 8,
+  "token_ceiling": 60000,
+  "difficulty": 1,
+  "supports_live": true,
+  "fake": {
+    "driver": "answer",
+    "args": {
+      "read": ["README.md", "store/session.py", "store/format.py", "tests/test_session.py"],
+      "text": "`remaining(600)` 现在返回 0.0，因为 `store/session.py` 的 `expires_at()` 写的是 `self.created + self.ttl_minutes`，把分钟当秒用了 —— 少了一次 * 60 的单位换算，30 分钟被当成 30 秒，600 秒时早就过期，于是 `remaining()` 兜到 0.0。`humanize(125)` 现在返回 \"2m\"：`store/format.py` 在 `if minutes:` 分支里提前 `return \"\".join(parts)`，分钟后面的秒永远打不出来，所以 `125` 少尾巴、`60` 变 \"1m\" 而不是 \"1m0s\"。"
+    }
+  },
+  "notes": "四个关键字各自带交替写法（`* 60`/乘 60 等），因为「同一件事的不同说法」不该让出题人再加字段。"
+}

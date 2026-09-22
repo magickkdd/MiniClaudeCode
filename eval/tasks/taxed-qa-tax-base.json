@@ -1,0 +1,26 @@
+{
+  "id": "taxed-qa-tax-base",
+  "instruction": "只读，不要修改任何文件。`total([(1, 100.0)], region=\"eu\", discount=0.10)` 这一句现在返回多少？README 承诺的是 110.70，差在**哪两处**？请给出具体数值、文件名，以及每个问题所在的那行代码。",
+  "source": { "kind": "vendored", "path": "eval/fixtures/taxed-base" },
+  "answer_keywords": [
+    "110.0|110.00",
+    "0.20|20%",
+    "0.23|23%",
+    "折后|打折后|discounted"
+  ],
+  "mode": "readonly",
+  "expected_termination": "completed",
+  "tags": ["readonly", "explanation", "root-cause"],
+  "max_turns": 8,
+  "token_ceiling": 60000,
+  "difficulty": 1,
+  "supports_live": true,
+  "fake": {
+    "driver": "answer",
+    "args": {
+      "read": ["README.md", "pricing/cart.py", "pricing/config.py"],
+      "text": "现在返回 110.00，比 README 承诺的 110.70 少 0.70。两处根因：1) `pricing/config.py` 的 `TAX_RATES` 把 `eu` 写成 0.20，同一文件里 `# 欧盟 VAT 是 23%` 那句注释说应为 0.23；2) `pricing/cart.py` 的 `total()` 里 `tax = base * tax_of(region)` 用的是打折前的小计，欧盟 VAT 应按折后价计税 —— 正确算法是 100 → 折后 90 → ×1.23 = 110.70。"
+    }
+  },
+  "notes": "只读问答题。判据是 `answer_keywords`（唯一读模型答复的判据）+ 工作区哈希必须与基线一致，两者缺一不可。"
+}

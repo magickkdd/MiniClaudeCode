@@ -1,0 +1,37 @@
+{
+  "id": "rt-checkout-bulk",
+  "instruction": "这个仓库的测试现在是红的。找出原因、修好它、重跑测试直到全绿。注意：不要为了让测试通过而修改 tests/ 里的断言。",
+  "source": { "kind": "vendored", "path": "demos/fixtures/red-tests" },
+  "fail_to_pass": [
+    "tests/test_checkout.py::test_bulk_purchase_checkout"
+  ],
+  "pass_to_pass": [
+    "tests/test_cart.py::test_add_creates_a_line",
+    "tests/test_cart.py::test_repeated_sku_merges_quantity",
+    "tests/test_cart.py::test_multiple_lines_sum",
+    "tests/test_cart.py::test_default_quantity_is_one",
+    "tests/test_cart.py::test_rejects_non_positive_price_or_qty[0-1]",
+    "tests/test_cart.py::test_rejects_non_positive_price_or_qty[-1-1]",
+    "tests/test_cart.py::test_rejects_non_positive_price_or_qty[1.0-0]",
+    "tests/test_cart.py::test_rejects_non_positive_price_or_qty[1.0--3]",
+    "tests/test_checkout.py::test_empty_cart_still_pays_shipping",
+    "tests/test_checkout.py::test_small_cart_pays_flat_shipping",
+    "tests/test_checkout.py::test_free_shipping_at_the_threshold",
+    "tests/test_checkout.py::test_unknown_coupon_is_rejected",
+    "tests/test_checkout.py::test_welcome_coupon_is_five_percent",
+    "tests/test_checkout.py::test_tax_base_is_after_discount",
+    "tests/test_report.py::test_describe_order_lists_every_component",
+    "tests/test_report.py::test_money_rounds_to_two_places"
+  ],
+  "probe": "from cart import Cart, checkout\nc = Cart()\nc.add('mug', price=12.50, qty=10)\norder = checkout(c, coupon='BULK10')\nassert (order.subtotal, order.discount, order.tax, order.shipping, order.total) == (125.0, 12.5, 9.0, 0.0, 121.50), (order.subtotal, order.discount, order.tax, order.shipping, order.total)\n",
+  "protected": ["tests"],
+  "min_changed_files": 1,
+  "expected_termination": "completed",
+  "tags": ["bugfix", "self-debugging", "multi-bug", "whitelist"],
+  "max_turns": 16,
+  "token_ceiling": 140000,
+  "difficulty": 3,
+  "supports_live": true,
+  "fake": { "driver": "demo:red-tests" },
+  "notes": "两个缺陷串在一起：折扣率写错（0.01 应为 0.10）挡住了第二个（计税基数用了打折前的小计）—— 只修第一个，同一个用例会以另一个数字继续红。self-debugging 的价值就在这类「一次看不全」的题上。"
+}

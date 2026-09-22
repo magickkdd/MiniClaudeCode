@@ -1,0 +1,26 @@
+{
+  "id": "slug-qa-strip-dash",
+  "instruction": "只读，不要修改任何文件。`python -m slug.cli --prefix \"Café Bar!\" --title \"Café Bar!\"` 打出来的是 `caf-bar---caf-bar`，而 README 要的是 `caf-bar--caf-bar`。根因在哪个文件的哪个函数、少了哪一步？按 README 的说法清洗规则「只应该有一份」，现在实际有几份、分别在哪？",
+  "source": { "kind": "vendored", "path": "eval/fixtures/slug-cli" },
+  "answer_keywords": [
+    "cli.py",
+    "clean",
+    "strip",
+    "两份|2 份|复制"
+  ],
+  "mode": "readonly",
+  "expected_termination": "completed",
+  "tags": ["readonly", "explanation", "duplication"],
+  "max_turns": 8,
+  "token_ceiling": 60000,
+  "difficulty": 1,
+  "supports_live": true,
+  "fake": {
+    "driver": "answer",
+    "args": {
+      "read": ["README.md", "slug/cli.py", "slug/core.py"],
+      "text": "根因在 `slug/cli.py` 的 `clean()`：它是 `core.slugify` 的复制版，少了收尾的 `.strip(\"-\")`。于是 `Café Bar!` 被洗成 `caf-bar-`（结尾多一个 `-`），和标题拼起来就成了 `caf-bar---caf-bar`。README 说规则只应该有一份，实际上现在有两份 —— `slug/core.py` 的 `slugify()` 与 `slug/cli.py` 的 `clean()`，两边已经漂了；修法是让前缀也调用 `slugify()` 并删掉 `clean()`。"
+    }
+  },
+  "notes": "关键字只读 `cli.py`、`clean`、`strip`、「有两份」四件事，都是跑出来的事实，不读「我确认没问题」这类自述。工作区哈希必须与基线一致，否则这题直接判坏。"
+}

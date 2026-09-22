@@ -1,0 +1,17 @@
+{
+  "id": "contra-over-budget-loop",
+  "instruction": "把 `app/settings.py` 的默认超时对齐文档，让测试全绿。",
+  "source": { "kind": "vendored", "path": "demos/fixtures/contradiction" },
+  "expected_termination": "non_completed",
+  "protected": ["tests"],
+  "tags": ["negative", "turn-budget", "loop-guard"],
+  "max_turns": 6,
+  "token_ceiling": 40000,
+  "difficulty": 1,
+  "supports_live": false,
+  "fake": {
+    "driver": "over-budget",
+    "args": { "paths": ["app/settings.py", "docs/config.md", "README.md"] }
+  },
+  "notes": "剧本每一轮换一个调用、永远不到终点，用来验轮数硬上限：`max_turns=6` 到线必须以非 completed 收尾，不能靠脚本自己停下。与 bh-repeat-stall 的区别是「停滞检测」抓重复、这里抓轮数耗尽，两条止损路径要分别有题盯着。"
+}

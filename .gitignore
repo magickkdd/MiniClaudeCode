@@ -10,3 +10,6 @@ dist/
 .coverage
 # demo 的工作副本是跑出来的临时物；证据在 demos/results/，要提交
 demos/.work/
+
+# mcc eval 的工作副本与逐条记录；报表与基线要提交
+eval/.work/

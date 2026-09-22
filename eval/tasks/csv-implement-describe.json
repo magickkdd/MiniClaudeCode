@@ -1,0 +1,41 @@
+{
+  "id": "csv-implement-describe",
+  "instruction": "`report.summary.describe()` 还在抛 `NotImplementedError`，README 里给了它必须逐字兑现的格式，把实现补上。`docs/known-issues.md` 里那条 CSV 导出的红测试不在本次范围，别去动它；`tests/` 下的断言一个字都不许改。",
+  "source": { "kind": "vendored", "path": "eval/fixtures/csv-report" },
+  "pass_to_pass": [
+    "tests/test_load.py::test_parse_amount_plain_number",
+    "tests/test_load.py::test_parse_amount_thousands_separator",
+    "tests/test_load.py::test_parse_amount_currency_and_padding",
+    "tests/test_load.py::test_parse_amount_rejects_garbage",
+    "tests/test_load.py::test_read_rows_normalises_regions",
+    "tests/test_summary.py::test_totals_group_by_region",
+    "tests/test_summary.py::test_top_region_picks_largest",
+    "tests/test_summary.py::test_top_region_breaks_ties_alphabetically",
+    "tests/test_summary.py::test_money_uses_thousands_separator",
+    "tests/test_summary.py::test_totals_of_no_rows_is_empty"
+  ],
+  "probe": "from report import Row, describe; assert describe([Row('eu', 820.0), Row('us', 430.0), Row('eu', 0.0)]) == '3 行 · 总额 1,250.00 · 最高地区 eu（820.00）', describe([Row('eu', 820.0), Row('us', 430.0), Row('eu', 0.0)]); assert describe([]) == '0 行 · 总额 0.00 · 最高地区 无（0.00）', describe([]); print('ok')",
+  "protected": ["tests"],
+  "min_changed_files": 1,
+  "expected_termination": "completed",
+  "tags": ["feature", "readme-drift", "whitelist", "partial-red-repo"],
+  "max_turns": 14,
+  "token_ceiling": 120000,
+  "difficulty": 2,
+  "supports_live": true,
+  "fake": {
+    "driver": "edit-verify",
+    "args": {
+      "read": ["README.md", "report/summary.py"],
+      "fixes": [
+        {
+          "path": "report/summary.py",
+          "old": "    还没实现。\n    \"\"\"\n    raise NotImplementedError(\"describe() 待实现，格式定义在 README\")\n",
+          "new": "    \"\"\"\n    totals = totals_by_region(rows)\n    name, amount = top_region(totals)\n    return (\n        f\"{len(rows)} 行 · 总额 {money(sum(row.amount for row in rows))}\"\n        f\" · 最高地区 {name}（{money(amount)}）\"\n    )\n"
+        }
+      ],
+      "text": "describe() 按 README 的格式实现了，空列表走「无（0.00）」那一支。"
+    }
+  },
+  "notes": "这道题考的是「仓库里有一条合法的无用例能不能判」：`tests/test_export.py` 基线红、不在任何白名单里，仓库级退出码永远是 1，用例级白名单才给得出正确结论。`describe()` 没有任何基线用例，所以成功判据是独立 probe，不是 FAIL_TO_PASS。附带一件实测发现：这条留在仓库里的红灯会让失败分类器贴 `self_confirm`（规则是「最后一次验证是红的却以 completed 收尾」），而判定依旧是 pass —— 分类器不知道范围外这回事，这正是「标签只作诊断、判定只由判据决定」这条分工存在的理由。"
+}

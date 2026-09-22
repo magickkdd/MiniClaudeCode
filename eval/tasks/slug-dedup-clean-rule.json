@@ -1,0 +1,52 @@
+{
+  "id": "slug-dedup-clean-rule",
+  "instruction": "`--prefix` 和 `--title` 本该走同一套清洗规则，现在 `--prefix \"Café Bar!\"` 洗出来的结果和 `slugify(\"Café Bar!\")` 不一样，`tests/test_cli.py` 里那条共享规则的用例是红的。修好它，并且把 README 说的「清洗规则只应该有一份」真正落到文件结构上。`tests/` 不许动。",
+  "source": { "kind": "vendored", "path": "eval/fixtures/slug-cli" },
+  "fail_to_pass": [
+    "tests/test_cli.py::test_prefix_and_title_share_one_cleaning_rule"
+  ],
+  "pass_to_pass": [
+    "tests/test_cli.py::test_cli_joins_prefix_and_title",
+    "tests/test_cli.py::test_cli_skips_empty_prefix",
+    "tests/test_cli.py::test_title_is_required",
+    "tests/test_core.py::test_lowercases_and_joins_words",
+    "tests/test_core.py::test_collapses_runs_of_punctuation",
+    "tests/test_core.py::test_strips_leading_and_trailing_dashes",
+    "tests/test_core.py::test_non_ascii_counts_as_separator",
+    "tests/test_core.py::test_empty_and_punctuation_only_input"
+  ],
+  "probe": "import inspect; from slug import cli; assert cli.main(['--prefix', 'Café Bar!', '--title', 'Café Bar!']) == 'caf-bar--caf-bar', cli.main(['--prefix', 'Café Bar!', '--title', 'Café Bar!']); src = inspect.getsource(cli); assert 'def clean(' not in src, 'cli.py 里还留着第二份清洗实现'",
+  "protected": ["tests"],
+  "min_changed_files": 1,
+  "expected_termination": "completed",
+  "tags": ["bugfix", "dedup", "structure"],
+  "max_turns": 14,
+  "token_ceiling": 120000,
+  "difficulty": 2,
+  "supports_live": true,
+  "fake": {
+    "driver": "edit-verify",
+    "args": {
+      "read": ["slug/cli.py", "slug/core.py", "tests/test_cli.py"],
+      "fixes": [
+        {
+          "path": "slug/cli.py",
+          "old": "    parts = [segment for segment in (clean(args.prefix), slugify(args.title)) if segment]\n",
+          "new": "    parts = [segment for segment in (slugify(args.prefix), slugify(args.title)) if segment]\n"
+        },
+        {
+          "path": "slug/cli.py",
+          "old": "from .core import slugify\n\n_PREFIX_NOISE = re.compile(r\"[^a-z0-9]+\")\n\n\ndef clean(text: str) -> str:\n    \"\"\"`core.slugify` 的复制版，少了收尾的 `strip(\"-\")`。\"\"\"\n    return _PREFIX_NOISE.sub(\"-\", (text or \"\").lower())\n",
+          "new": "from .core import slugify\n"
+        },
+        {
+          "path": "slug/cli.py",
+          "old": "import argparse\nimport re\n",
+          "new": "import argparse\n"
+        }
+      ],
+      "text": "前缀改走 `core.slugify`，`cli.py` 里那份复制的 `clean()` 连同它的正则一起删掉了，现在清洗规则只剩一份。"
+    }
+  },
+  "notes": "光把断言修绿很容易（给 `clean()` 补一个 `strip(\"-\")` 就行），但那样仓库里还是两份规则 —— 所以 probe 额外读 `cli.py` 的源码，要求那份复制实现真的消失。这是「结构性的判据」：跑代码判的是文件里还有什么。"
+}

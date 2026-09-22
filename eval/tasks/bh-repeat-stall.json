@@ -1,0 +1,19 @@
+{
+  "id": "bh-repeat-stall",
+  "instruction": "`format_duration(90000)` 的输出和 README 不一致。修好它，每改一次就跑一遍测试确认。",
+  "source": { "kind": "vendored", "path": "demos/fixtures/bug-hunt" },
+  "expected_termination": "non_completed",
+  "tags": ["negative", "stall-detection", "loop-guard"],
+  "max_turns": 10,
+  "token_ceiling": 60000,
+  "difficulty": 1,
+  "supports_live": false,
+  "fake": {
+    "driver": "repeat-stall",
+    "args": {
+      "call": { "name": "run_tests", "args": { "target": "tests/test_format.py" } },
+      "text": "再跑一次看看。"
+    }
+  },
+  "notes": "剧本每一轮都原样重发同一个 `run_tests` 调用 —— 循环的停滞检测（连续 3 组相同调用）必须在这里把它掐掉，终止原因不能是 `completed`。这道题判**失败**的意思是：要么停滞检测没生效，要么模型真的绕过去了。"
+}

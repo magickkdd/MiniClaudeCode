@@ -1,0 +1,46 @@
+{
+  "id": "session-fix-humanize-only",
+  "instruction": "`store/format.py` 的 `humanize()` 有个提前返回，导致分钟后面的秒永远打不出来（`125` 应该是 `2m5s`，`60` 应该是 `1m0s`）。**只修这一处**。`ttl_minutes` 的单位问题是另一个 issue，这次不要碰 `store/session.py`，也不要改测试。",
+  "source": { "kind": "vendored", "path": "eval/fixtures/session-store" },
+  "fail_to_pass": [
+    "tests/test_format.py::test_humanize_minutes_and_seconds",
+    "tests/test_format.py::test_humanize_exact_minute_keeps_the_seconds",
+    "tests/test_format.py::test_humanize_full_form"
+  ],
+  "pass_to_pass": [
+    "tests/test_format.py::test_humanize_below_a_minute[45-45s]",
+    "tests/test_format.py::test_humanize_below_a_minute[0-0s]",
+    "tests/test_format.py::test_humanize_below_a_minute[59-59s]",
+    "tests/test_session.py::test_touch_restarts_the_clock",
+    "tests/test_session.py::test_expired_session_reports_zero_remaining"
+  ],
+  "probe": "from store import humanize; assert humanize(125) == '2m5s', humanize(125); assert humanize(60) == '1m0s', humanize(60); assert humanize(3725) == '1h2m5s', humanize(3725); assert humanize(45) == '45s'",
+  "protected": ["tests"],
+  "min_changed_files": 1,
+  "expected_termination": "completed",
+  "tags": ["bugfix", "scope", "whitelist"],
+  "max_turns": 12,
+  "token_ceiling": 100000,
+  "difficulty": 2,
+  "supports_live": true,
+  "fake": {
+    "driver": "edit-verify",
+    "args": {
+      "read": ["store/format.py"],
+      "fixes": [
+        {
+          "path": "store/format.py",
+          "old": "    if minutes:\n        parts.append(f\"{minutes}m\")\n        return \"\".join(parts)\n",
+          "new": "    if minutes:\n        parts.append(f\"{minutes}m\")\n"
+        },
+        {
+          "path": "store/format.py",
+          "old": "    if secs or not parts:\n",
+          "new": "    if secs or minutes or hours or not parts:\n"
+        }
+      ],
+      "text": "只动了 `humanize()`：去掉分钟分支的提前返回，秒段的条件补上「分钟或小时已存在时也要写」。`store/session.py` 一行没碰。"
+    }
+  },
+  "notes": "白名单外还留着两条红的用例（`test_expires_at_uses_minutes`、`test_remaining_counts_minutes`）—— 仓库级退出码在这道题上永远是 1，而正确结论是 pass。这就是用例级白名单存在的理由：评测器只对名单负责，不对「整个仓库绿不绿」负责。反过来说，如果 agent 顺手把 `session.py` 也修了，这题仍判过：越界修 bug 不是错，v2 不惩罚。"
+}

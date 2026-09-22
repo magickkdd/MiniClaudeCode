@@ -1,0 +1,17 @@
+评测开始：6/24 题 × 1 次（子集） · engine=live · 输出 D:\Embodied Agent\Agent-JD\mini-claude-code\eval\.work\live
+bh-format-duration r0 → fail · 7 轮 · 23122 ms
+bh-readonly-explain r0 → pass · 4 轮 · 14401 ms
+csv-add-export r0 → pass · 4 轮 · 10221 ms
+csv-implement-describe r0 → pass · 6 轮 · 23796 ms
+csv-qa-scope r0 → pass · 3 轮 · 14947 ms
+gf-calculator r0 → fail · 13 轮 · 83114 ms
+
+runs=6 · verdicts={'pass': 4, 'fail': 2, 'error': 0} · pass@1=4/6 · pass@1=4/6
+tokens=313,812 / 预算 300,000 · 墙钟 p50=19,034ms p95=68,284ms
+（未与基线对比：这是 6/24 题的子集，不自动配全量基线；要对比请显式 --baseline）
+· 这些题按判据没做对：bh-format-duration, gf-calculator
+· 超出单题 token 上限：gf-calculator
+
+报表：D:\Embodied Agent\Agent-JD\mini-claude-code\eval\.work\live\report.md
+明细：D:\Embodied Agent\Agent-JD\mini-claude-code\eval\.work\live\report.json · 逐条记录：D:\Embodied Agent\Agent-JD\mini-claude-code\eval\.work\live\manifest.jsonl
+EXIT=0

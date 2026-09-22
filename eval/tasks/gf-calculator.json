@@ -1,0 +1,17 @@
+{
+  "id": "gf-calculator",
+  "instruction": "在当前目录创建一个 Python 计算器项目：`calculator` 包提供 add/subtract/multiply/divide 和 `evaluate(expression)`，后者解析形如 `2 + 3 * 4` 的四则表达式，乘除优先于加减，同级从左到右，不支持括号；除数为零抛 `DivideByZeroError`。写完整的 pytest 测试并跑到全绿，最后把用法记进 README。",
+  "source": { "kind": "vendored", "path": "demos/fixtures/greenfield" },
+  "verify_cmd": "python -m pytest tests -q --no-header -p no:cacheprovider --confcutdir . --rootdir .",
+  "probe": "from calculator import DivideByZeroError, evaluate\nassert evaluate('2 + 3 * 4') == 14, evaluate('2 + 3 * 4')\nassert evaluate('10 - 4 - 3') == 3, evaluate('10 - 4 - 3')\nassert evaluate('100 / 8') == 12.5, evaluate('100 / 8')\ntry:\n    evaluate('1 / 0')\nexcept DivideByZeroError:\n    pass\nelse:\n    raise AssertionError('`1 / 0` 没有抛 DivideByZeroError')\n",
+  "must_exist": ["calculator/core.py", "calculator/__init__.py", "tests/test_calculator.py", "README.md"],
+  "min_changed_files": 4,
+  "expected_termination": "completed",
+  "tags": ["greenfield", "codegen", "self-debugging"],
+  "max_turns": 18,
+  "token_ceiling": 180000,
+  "difficulty": 3,
+  "supports_live": true,
+  "fake": { "driver": "demo:codegen" },
+  "notes": "从零建包，没有基线用例可跑，所以判据是 `verify_cmd`（新增测试全绿）+ 独立 probe（求值语义、除零行为）+ 文件存在性。probe 故意不复用模型写的测试：测试本身也可能把优先级写错。"
+}

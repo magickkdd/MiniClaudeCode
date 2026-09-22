@@ -1,0 +1,46 @@
+{
+  "id": "taxed-fix-eu-vat",
+  "instruction": "README 里写着 `total([(1, 100.0)], region=\"eu\", discount=0.10)` 应该等于 110.70，现在跑出来对不上。修好它。`tests/` 里的断言一个字都不许动，改完自己跑一遍测试，确认既有用例没被弄坏。",
+  "source": { "kind": "vendored", "path": "eval/fixtures/taxed-base" },
+  "fail_to_pass": [
+    "tests/test_readme.py::test_readme_eu_discount_example"
+  ],
+  "pass_to_pass": [
+    "tests/test_pricing.py::test_subtotal_sums_line_items",
+    "tests/test_pricing.py::test_subtotal_of_empty_cart_is_zero",
+    "tests/test_pricing.py::test_discounted_applies_rate",
+    "tests/test_pricing.py::test_discounted_rejects_rate_above_cap",
+    "tests/test_pricing.py::test_tax_of_known_regions",
+    "tests/test_pricing.py::test_tax_of_unknown_region_raises",
+    "tests/test_pricing.py::test_total_without_discount_adds_tax",
+    "tests/test_pricing.py::test_total_with_discount_but_no_tax",
+    "tests/test_pricing.py::test_total_keeps_two_decimals",
+    "tests/test_readme.py::test_readme_subtotal_example",
+    "tests/test_readme.py::test_readme_uk_example"
+  ],
+  "probe": "from pricing import total, tax_of; assert tax_of('eu') == 0.23, tax_of('eu'); assert total([(1, 100.0)], region='eu', discount=0.10) == 110.70, total([(1, 100.0)], region='eu', discount=0.10); assert total([(1, 80.0)], region='uk') == 96.00; assert total([(2, 19.99), (1, 4.5)], region='none') == 44.48; print('ok')",
+  "protected": ["tests"],
+  "min_changed_files": 1,
+  "expected_termination": "completed",
+  "tags": ["bugfix", "numeric", "readme-drift", "whitelist"],
+  "max_turns": 14,
+  "token_ceiling": 120000,
+  "difficulty": 2,
+  "supports_live": true,
+  "fake": {
+    "driver": "edit-verify",
+    "args": {
+      "read": ["pricing/cart.py", "pricing/config.py"],
+      "fixes": [
+        { "path": "pricing/config.py", "old": "    \"eu\": 0.20,\n", "new": "    \"eu\": 0.23,\n" },
+        {
+          "path": "pricing/cart.py",
+          "old": "    base = subtotal(lines)\n    tax = base * tax_of(region)\n    return round(base + tax - base * discount, 2)\n",
+          "new": "    base = discounted(subtotal(lines), discount)\n    return round(base * (1.0 + tax_of(region)), 2)\n"
+        }
+      ],
+      "text": "改好了：欧盟税率按文档写成 23%，计税基数改成折后价。README 的三个算例现在都对得上。"
+    }
+  },
+  "notes": "两个缺陷叠在一道题里（税率数值 + 计税顺序），只修一个都拿不到 FAIL_TO_PASS。fake 剧本带的是标准答案，所以这道题在 fake 引擎下应该判绿——它是「判据能不能认出正确补丁」的正样本。"
+}

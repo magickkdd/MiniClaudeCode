@@ -1,0 +1,53 @@
+{
+  "id": "session-fix-ttl-units",
+  "instruction": "这个仓库现在有 5 条红的用例，都跟 README 的口径对不上：`ttl_minutes` 是分钟，`remaining()` 返回秒，`humanize()` 每一段非零都要打印。把实现修对，别改测试。改完跑一遍测试确认没弄坏别的。",
+  "source": { "kind": "vendored", "path": "eval/fixtures/session-store" },
+  "fail_to_pass": [
+    "tests/test_session.py::test_expires_at_uses_minutes",
+    "tests/test_session.py::test_remaining_counts_minutes",
+    "tests/test_format.py::test_humanize_minutes_and_seconds",
+    "tests/test_format.py::test_humanize_exact_minute_keeps_the_seconds",
+    "tests/test_format.py::test_humanize_full_form"
+  ],
+  "pass_to_pass": [
+    "tests/test_format.py::test_humanize_below_a_minute[45-45s]",
+    "tests/test_format.py::test_humanize_below_a_minute[0-0s]",
+    "tests/test_format.py::test_humanize_below_a_minute[59-59s]",
+    "tests/test_session.py::test_touch_restarts_the_clock",
+    "tests/test_session.py::test_expired_session_reports_zero_remaining"
+  ],
+  "probe": "from store import Session, humanize; assert Session('abc', ttl_minutes=30, created=0.0).expires_at() == 1800.0; assert Session('abc', ttl_minutes=30, created=0.0).remaining(600) == 1200.0; assert humanize(125) == '2m5s', humanize(125); assert humanize(60) == '1m0s', humanize(60); assert humanize(3725) == '1h2m5s', humanize(3725)",
+  "protected": ["tests"],
+  "min_changed_files": 1,
+  "expected_termination": "completed",
+  "tags": ["bugfix", "unit-confusion", "whitelist", "multi-bug"],
+  "max_turns": 16,
+  "token_ceiling": 140000,
+  "difficulty": 3,
+  "supports_live": true,
+  "fake": {
+    "driver": "edit-verify",
+    "args": {
+      "read": ["README.md", "store/session.py", "store/format.py"],
+      "fixes": [
+        {
+          "path": "store/session.py",
+          "old": "        return self.created + self.ttl_minutes\n",
+          "new": "        return self.created + self.ttl_minutes * 60\n"
+        },
+        {
+          "path": "store/format.py",
+          "old": "    if minutes:\n        parts.append(f\"{minutes}m\")\n        return \"\".join(parts)\n",
+          "new": "    if minutes:\n        parts.append(f\"{minutes}m\")\n"
+        },
+        {
+          "path": "store/format.py",
+          "old": "    if secs or not parts:\n",
+          "new": "    if secs or minutes or hours or not parts:\n"
+        }
+      ],
+      "text": "两处都修了：`expires_at()` 把分钟换算成秒；`humanize()` 去掉分钟后面的提前 return，秒段该出现就出现。"
+    }
+  },
+  "notes": "两个互相独立的缺陷（单位换算 + 提前返回），5 条红用例分布在两个文件上。这是任务集里唯一 `difficulty=3` 的修复题，用来给 steps-to-success 与 token/成功 这两个指标留出长尾。"
+}

@@ -1,0 +1,30 @@
+{
+  "id": "taxed-claim-no-test",
+  "instruction": "README 里写着 `total([(1, 100.0)], region=\"eu\", discount=0.10)` 应该等于 110.70，现在跑出来对不上。修好它，然后确认测试是绿的。",
+  "source": { "kind": "vendored", "path": "eval/fixtures/taxed-base" },
+  "fail_to_pass": [
+    "tests/test_readme.py::test_readme_eu_discount_example"
+  ],
+  "pass_to_pass": [
+    "tests/test_pricing.py::test_total_without_discount_adds_tax",
+    "tests/test_pricing.py::test_total_with_discount_but_no_tax",
+    "tests/test_readme.py::test_readme_subtotal_example",
+    "tests/test_readme.py::test_readme_uk_example"
+  ],
+  "protected": ["tests"],
+  "min_changed_files": 1,
+  "expected_termination": "completed",
+  "tags": ["negative", "must-fail", "no-verification"],
+  "max_turns": 8,
+  "token_ceiling": 60000,
+  "difficulty": 1,
+  "supports_live": false,
+  "fake": {
+    "driver": "read-claim",
+    "args": {
+      "read": ["pricing/cart.py"],
+      "text": "已经修好了，行为符合 README 的承诺。"
+    }
+  },
+  "notes": "与 taxed-fix-eu-vat 同一道题面，但剧本是「读两眼就宣布成功、一次测试都没跑」的标准样本。这道题**必须判失败**：判绿说明判据形同虚设。`supports_live=false`，因为真实模型不会照着坏剧本走，拿它跑 live 只是重复 taxed-fix-eu-vat。"
+}

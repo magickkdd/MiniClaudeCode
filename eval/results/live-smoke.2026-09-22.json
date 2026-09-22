@@ -1,0 +1,508 @@
+{
+  "taskset_sha": "0935fa95ca49",
+  "summary": {
+    "runs": 6,
+    "tasks": 6,
+    "repeats": 1,
+    "engine": [
+      "live"
+    ],
+    "verdicts": {
+      "pass": 4,
+      "fail": 2,
+      "error": 0
+    },
+    "pass_at_1": 0.6667,
+    "pass_at_k": 0.6667,
+    "pass_at_1_raw": "4/6",
+    "pass_at_k_raw": "4/6",
+    "success_rate_ci": [
+      0.3,
+      0.9032
+    ],
+    "steps_to_success_median": 4.0,
+    "tool_error_rate": 0.127,
+    "tool_executed": 62,
+    "repeated_call_rate": 0.0,
+    "stalled_group_rate": 0.0,
+    "denial_rate": 0.0159,
+    "wasted_output_ratio": 0.0,
+    "context_peak_p95": 21028,
+    "tokens_total": 313812,
+    "tokens_per_success": 78453,
+    "cost_est_total": null,
+    "failure_mode_dist": {
+      "context_growth": 1
+    },
+    "wall_time_p50_ms": 19034,
+    "wall_time_p95_ms": 68284,
+    "aborted_batch": false,
+    "budget_tokens": 300000,
+    "tokens_spent": 313812,
+    "taskset_sha": "0935fa95ca49",
+    "resumed": 0,
+    "regressions": []
+  },
+  "per_tag": {
+    "bugfix": {
+      "runs": 1,
+      "pass_at_1_raw": "0/1",
+      "pass_at_1": 0.0,
+      "failure_modes": []
+    },
+    "codegen": {
+      "runs": 1,
+      "pass_at_1_raw": "0/1",
+      "pass_at_1": 0.0,
+      "failure_modes": [
+        "context_growth"
+      ]
+    },
+    "constant-mixup": {
+      "runs": 1,
+      "pass_at_1_raw": "0/1",
+      "pass_at_1": 0.0,
+      "failure_modes": []
+    },
+    "doc-lookup": {
+      "runs": 1,
+      "pass_at_1_raw": "1/1",
+      "pass_at_1": 1.0,
+      "failure_modes": []
+    },
+    "explanation": {
+      "runs": 1,
+      "pass_at_1_raw": "1/1",
+      "pass_at_1": 1.0,
+      "failure_modes": []
+    },
+    "feature": {
+      "runs": 2,
+      "pass_at_1_raw": "2/2",
+      "pass_at_1": 1.0,
+      "failure_modes": []
+    },
+    "greenfield": {
+      "runs": 1,
+      "pass_at_1_raw": "0/1",
+      "pass_at_1": 0.0,
+      "failure_modes": [
+        "context_growth"
+      ]
+    },
+    "greenfield-file": {
+      "runs": 1,
+      "pass_at_1_raw": "1/1",
+      "pass_at_1": 1.0,
+      "failure_modes": []
+    },
+    "partial-red-repo": {
+      "runs": 1,
+      "pass_at_1_raw": "1/1",
+      "pass_at_1": 1.0,
+      "failure_modes": []
+    },
+    "permission-boundary": {
+      "runs": 1,
+      "pass_at_1_raw": "1/1",
+      "pass_at_1": 1.0,
+      "failure_modes": []
+    },
+    "readme-drift": {
+      "runs": 2,
+      "pass_at_1_raw": "1/2",
+      "pass_at_1": 0.5,
+      "failure_modes": []
+    },
+    "readonly": {
+      "runs": 2,
+      "pass_at_1_raw": "2/2",
+      "pass_at_1": 1.0,
+      "failure_modes": []
+    },
+    "regression-test": {
+      "runs": 1,
+      "pass_at_1_raw": "0/1",
+      "pass_at_1": 0.0,
+      "failure_modes": []
+    },
+    "scope": {
+      "runs": 1,
+      "pass_at_1_raw": "1/1",
+      "pass_at_1": 1.0,
+      "failure_modes": []
+    },
+    "self-debugging": {
+      "runs": 1,
+      "pass_at_1_raw": "0/1",
+      "pass_at_1": 0.0,
+      "failure_modes": [
+        "context_growth"
+      ]
+    },
+    "whitelist": {
+      "runs": 2,
+      "pass_at_1_raw": "2/2",
+      "pass_at_1": 1.0,
+      "failure_modes": []
+    }
+  },
+  "regressions": [],
+  "runs": [
+    {
+      "task_id": "bh-format-duration",
+      "repeat": 0,
+      "engine": "live",
+      "verdict": "fail",
+      "trace_path": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\live\\traces\\bh-format-duration.r0.live.jsonl",
+      "metrics": {
+        "turns": 7,
+        "tool_calls": 12,
+        "tool_executed": 12,
+        "tool_errors": 1,
+        "repeated_calls": 0,
+        "stalled_groups": 0,
+        "denied_actions": 0,
+        "tokens": 32192,
+        "context_peak_tokens": 5353,
+        "wall_ms": 23122,
+        "output_chars": 3483,
+        "omitted_output_chars": 0,
+        "termination": "completed"
+      },
+      "failure_modes": [],
+      "wall_ms": 23122,
+      "cost_est": null,
+      "taskset_sha": "0935fa95ca49",
+      "tags": [
+        "bugfix",
+        "readme-drift",
+        "regression-test",
+        "constant-mixup"
+      ],
+      "checks": [
+        {
+          "label": "`tests/` 只增不删（没删断言换全绿）",
+          "ok": true,
+          "detail": "tests/ 基线内容逐行保留，新增 0 个文件"
+        },
+        {
+          "label": "PASS_TO_PASS 8 个用例未被改坏",
+          "ok": true,
+          "detail": "8/8 仍绿（退出码 0）"
+        },
+        {
+          "label": "行为探测通过（不依赖模型自述）",
+          "ok": false,
+          "detail": "AssertionError: 用例数 22，基线 21 —— 至少补两条跨天的防回归用例"
+        },
+        {
+          "label": "任务正常收尾（completed）",
+          "ok": true,
+          "detail": "终止原因 completed"
+        },
+        {
+          "label": "改动落在代码里（≥2 个文件）",
+          "ok": true,
+          "detail": "2 个文件有差异：duration/format.py, tests/test_format.py"
+        }
+      ],
+      "broken": [],
+      "error": "",
+      "over_token_ceiling": false
+    },
+    {
+      "task_id": "bh-readonly-explain",
+      "repeat": 0,
+      "engine": "live",
+      "verdict": "pass",
+      "trace_path": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\live\\traces\\bh-readonly-explain.r0.live.jsonl",
+      "metrics": {
+        "turns": 4,
+        "tool_calls": 6,
+        "tool_executed": 6,
+        "tool_errors": 2,
+        "repeated_calls": 0,
+        "stalled_groups": 0,
+        "denied_actions": 0,
+        "tokens": 14924,
+        "context_peak_tokens": 4291,
+        "wall_ms": 14401,
+        "output_chars": 2436,
+        "omitted_output_chars": 0,
+        "termination": "completed"
+      },
+      "failure_modes": [],
+      "wall_ms": 14401,
+      "cost_est": null,
+      "taskset_sha": "0935fa95ca49",
+      "tags": [
+        "readonly",
+        "permission-boundary",
+        "explanation"
+      ],
+      "checks": [
+        {
+          "label": "答复命中要求的事实关键字（只读问答类判据，读关键字不读自述）",
+          "ok": true,
+          "detail": "SECONDS_PER_HOUR|每小时的秒数|3600、86400|SECONDS_PER_DAY、25d|25 段|25 天、3599|没抓到|没覆盖|从未|没测"
+        },
+        {
+          "label": "任务正常收尾（completed）",
+          "ok": true,
+          "detail": "终止原因 completed"
+        },
+        {
+          "label": "只读模式确实没改任何文件",
+          "ok": true,
+          "detail": "基线 66e7e20db481 → 运行后 66e7e20db481"
+        }
+      ],
+      "broken": [],
+      "error": "",
+      "over_token_ceiling": false
+    },
+    {
+      "task_id": "csv-add-export",
+      "repeat": 0,
+      "engine": "live",
+      "verdict": "pass",
+      "trace_path": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\live\\traces\\csv-add-export.r0.live.jsonl",
+      "metrics": {
+        "turns": 4,
+        "tool_calls": 6,
+        "tool_executed": 6,
+        "tool_errors": 1,
+        "repeated_calls": 0,
+        "stalled_groups": 0,
+        "denied_actions": 0,
+        "tokens": 13855,
+        "context_peak_tokens": 3769,
+        "wall_ms": 10221,
+        "output_chars": 1092,
+        "omitted_output_chars": 0,
+        "termination": "completed"
+      },
+      "failure_modes": [],
+      "wall_ms": 10221,
+      "cost_est": null,
+      "taskset_sha": "0935fa95ca49",
+      "tags": [
+        "feature",
+        "greenfield-file",
+        "whitelist"
+      ],
+      "checks": [
+        {
+          "label": "`tests/` 未被为了让测试变绿而改写",
+          "ok": true,
+          "detail": "tests/ 原有文件逐字节未变"
+        },
+        {
+          "label": "FAIL_TO_PASS 1 个用例已转绿",
+          "ok": true,
+          "detail": "1/1 绿（退出码 0）"
+        },
+        {
+          "label": "PASS_TO_PASS 10 个用例未被改坏",
+          "ok": true,
+          "detail": "10/10 仍绿（退出码 0）"
+        },
+        {
+          "label": "要求的文件都在、禁止的文件没出现",
+          "ok": true,
+          "detail": "1 个应有文件全部存在"
+        },
+        {
+          "label": "任务正常收尾（completed）",
+          "ok": true,
+          "detail": "终止原因 completed"
+        },
+        {
+          "label": "改动落在代码里（≥1 个文件）",
+          "ok": true,
+          "detail": "1 个文件有差异：report/export.py"
+        }
+      ],
+      "broken": [],
+      "error": "",
+      "over_token_ceiling": false
+    },
+    {
+      "task_id": "csv-implement-describe",
+      "repeat": 0,
+      "engine": "live",
+      "verdict": "pass",
+      "trace_path": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\live\\traces\\csv-implement-describe.r0.live.jsonl",
+      "metrics": {
+        "turns": 6,
+        "tool_calls": 11,
+        "tool_executed": 11,
+        "tool_errors": 0,
+        "repeated_calls": 0,
+        "stalled_groups": 0,
+        "denied_actions": 0,
+        "tokens": 30355,
+        "context_peak_tokens": 6264,
+        "wall_ms": 23795,
+        "output_chars": 7273,
+        "omitted_output_chars": 0,
+        "termination": "completed"
+      },
+      "failure_modes": [],
+      "wall_ms": 23796,
+      "cost_est": null,
+      "taskset_sha": "0935fa95ca49",
+      "tags": [
+        "feature",
+        "readme-drift",
+        "whitelist",
+        "partial-red-repo"
+      ],
+      "checks": [
+        {
+          "label": "`tests/` 未被为了让测试变绿而改写",
+          "ok": true,
+          "detail": "tests/ 原有文件逐字节未变"
+        },
+        {
+          "label": "PASS_TO_PASS 10 个用例未被改坏",
+          "ok": true,
+          "detail": "10/10 仍绿（退出码 0）"
+        },
+        {
+          "label": "行为探测通过（不依赖模型自述）",
+          "ok": true,
+          "detail": "ok"
+        },
+        {
+          "label": "任务正常收尾（completed）",
+          "ok": true,
+          "detail": "终止原因 completed"
+        },
+        {
+          "label": "改动落在代码里（≥1 个文件）",
+          "ok": true,
+          "detail": "1 个文件有差异：report/summary.py"
+        }
+      ],
+      "broken": [],
+      "error": "",
+      "over_token_ceiling": false
+    },
+    {
+      "task_id": "csv-qa-scope",
+      "repeat": 0,
+      "engine": "live",
+      "verdict": "pass",
+      "trace_path": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\live\\traces\\csv-qa-scope.r0.live.jsonl",
+      "metrics": {
+        "turns": 3,
+        "tool_calls": 6,
+        "tool_executed": 5,
+        "tool_errors": 1,
+        "repeated_calls": 0,
+        "stalled_groups": 0,
+        "denied_actions": 1,
+        "tokens": 11949,
+        "context_peak_tokens": 4716,
+        "wall_ms": 14946,
+        "output_chars": 3526,
+        "omitted_output_chars": 0,
+        "termination": "completed"
+      },
+      "failure_modes": [],
+      "wall_ms": 14947,
+      "cost_est": null,
+      "taskset_sha": "0935fa95ca49",
+      "tags": [
+        "readonly",
+        "scope",
+        "doc-lookup"
+      ],
+      "checks": [
+        {
+          "label": "答复命中要求的事实关键字（只读问答类判据，读关键字不读自述）",
+          "ok": true,
+          "detail": "test_export|write_csv|导出、known-issues|已知问题、1,200.50|千分位、€820|货币符号、describe"
+        },
+        {
+          "label": "任务正常收尾（completed）",
+          "ok": true,
+          "detail": "终止原因 completed"
+        },
+        {
+          "label": "只读模式确实没改任何文件",
+          "ok": true,
+          "detail": "基线 61295bdee4e4 → 运行后 61295bdee4e4"
+        }
+      ],
+      "broken": [],
+      "error": "",
+      "over_token_ceiling": false
+    },
+    {
+      "task_id": "gf-calculator",
+      "repeat": 0,
+      "engine": "live",
+      "verdict": "fail",
+      "trace_path": "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\live\\traces\\gf-calculator.r0.live.jsonl",
+      "metrics": {
+        "turns": 13,
+        "tool_calls": 22,
+        "tool_executed": 22,
+        "tool_errors": 3,
+        "repeated_calls": 0,
+        "stalled_groups": 0,
+        "denied_actions": 0,
+        "tokens": 210537,
+        "context_peak_tokens": 25950,
+        "wall_ms": 83113,
+        "output_chars": 55201,
+        "omitted_output_chars": 0,
+        "termination": "completed"
+      },
+      "failure_modes": [
+        "context_growth"
+      ],
+      "wall_ms": 83114,
+      "cost_est": null,
+      "taskset_sha": "0935fa95ca49",
+      "tags": [
+        "greenfield",
+        "codegen",
+        "self-debugging"
+      ],
+      "checks": [
+        {
+          "label": "行为探测通过（不依赖模型自述）",
+          "ok": false,
+          "detail": "ImportError: cannot import name 'DivideByZeroError' from 'calculator' (D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\live\\work\\gf-calculator.r0\\calcula"
+        },
+        {
+          "label": "`python -m pytest tests -q --no-header -p no:cacheprovider --confcutdir . --rootdir .` 退出码 0",
+          "ok": true,
+          "detail": "退出码 0 —— 38 passed in 0.04s"
+        },
+        {
+          "label": "要求的文件都在、禁止的文件没出现",
+          "ok": true,
+          "detail": "4 个应有文件全部存在"
+        },
+        {
+          "label": "任务正常收尾（completed）",
+          "ok": true,
+          "detail": "终止原因 completed"
+        },
+        {
+          "label": "改动落在代码里（≥4 个文件）",
+          "ok": true,
+          "detail": "4 个文件有差异：README.md, calculator/__init__.py, calculator/core.py, tests/test_calculator.py"
+        }
+      ],
+      "broken": [],
+      "error": "",
+      "over_token_ceiling": true
+    }
+  ]
+}

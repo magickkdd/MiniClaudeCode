@@ -1,0 +1,29 @@
+{
+  "id": "session-guess-paths",
+  "instruction": "现在 5 条用例是红的：`ttl_minutes` 是分钟、`remaining()` 返回秒，`humanize()` 每一段非零都要打印。修好它们，不要改测试。",
+  "source": { "kind": "vendored", "path": "eval/fixtures/session-store" },
+  "fail_to_pass": [
+    "tests/test_session.py::test_expires_at_uses_minutes",
+    "tests/test_format.py::test_humanize_minutes_and_seconds",
+    "tests/test_format.py::test_humanize_full_form"
+  ],
+  "pass_to_pass": [
+    "tests/test_session.py::test_touch_restarts_the_clock",
+    "tests/test_format.py::test_humanize_below_a_minute[45-45s]"
+  ],
+  "protected": ["tests"],
+  "expected_termination": "any",
+  "tags": ["negative", "must-fail", "path-guessing"],
+  "max_turns": 10,
+  "token_ceiling": 60000,
+  "difficulty": 1,
+  "supports_live": false,
+  "fake": {
+    "driver": "guess-paths",
+    "args": {
+      "decoys": ["src/store/session.py", "store/main.py", "app/session.py", "lib/format.py"],
+      "text": "没找到对应文件，先按现状答复：看起来是单位换算问题。"
+    }
+  },
+  "notes": "「不先看目录结构就照想象的路径读文件」的标准样本：4 次 `read_file` 全部报路径不存在，然后收工。这道题**必须判失败**，并且 trace 的失败分类应该出现 `path_guessing` —— 分类没抓到就是分类器的 bug。"
+}

@@ -1,0 +1,26 @@
+{
+  "id": "bh-format-duration",
+  "instruction": "README 承诺 `format_duration(90000)` 返回 `1d1h0m0s`，实际返回 `25d0h0m0s`。定位根因并修好它，补一个能防回归的测试，然后跑一遍测试确认没弄坏别的。",
+  "source": { "kind": "vendored", "path": "demos/fixtures/bug-hunt" },
+  "pass_to_pass": [
+    "tests/test_format.py::test_under_a_minute",
+    "tests/test_format.py::test_whole_and_partial_minutes",
+    "tests/test_format.py::test_just_under_an_hour",
+    "tests/test_format.py::test_negative_raises[-1]",
+    "tests/test_parse.py::test_single_units",
+    "tests/test_parse.py::test_compound_order_does_not_matter",
+    "tests/test_cli.py::test_formats_bare_seconds",
+    "tests/test_stopwatch.py::test_start_stop_accumulates"
+  ],
+  "probe": "import subprocess, sys\nfrom duration import format_duration\nassert format_duration(90000) == '1d1h0m0s', format_duration(90000)\nassert format_duration(90061) == '1d1h1m1s', format_duration(90061)\nassert format_duration(86399) == '23h59m59s', format_duration(86399)\nassert format_duration(3661) == '1h1m1s', format_duration(3661)\nout = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '.', '-p', 'no:cacheprovider'], capture_output=True, text=True, cwd='.').stdout\nnodes = [line for line in out.splitlines() if '::' in line]\nassert len(nodes) >= 23, f'用例数 {len(nodes)}，基线 21 —— 至少补两条跨天的防回归用例'\n",
+  "added_only": ["tests"],
+  "min_changed_files": 2,
+  "expected_termination": "completed",
+  "tags": ["bugfix", "readme-drift", "regression-test", "constant-mixup"],
+  "max_turns": 14,
+  "token_ceiling": 120000,
+  "difficulty": 2,
+  "supports_live": true,
+  "fake": { "driver": "demo:bug-hunt" },
+  "notes": "这道题没有 FAIL_TO_PASS —— 基线里**没有任何用例覆盖跨天**，bug 是哑的。判据因此由两部分组成：独立 probe 验行为，外加「用例总数必须比基线 21 多」来验它确实补了测试。`added_only` 而非 `protected`：允许新建用例文件。"
+}

@@ -23,7 +23,7 @@
 
 注意最后那句自我更正：**优先级 bug 是测试抓出来的，不是模型看出来的**。这就是 `run_tests` 作为判据而不是装饰的意义。
 
-当前状态：**195 项测试全绿**，4 个 demo 在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由 [`demos/results/`](demos/results/) 里的证据文件从 trace 自动生成。
+当前状态：**382 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
 
 ---
 
@@ -207,6 +207,37 @@ Ctrl-C 的语义是**放弃当前输入但保留历史**：中断不该毁掉已
 | `LLM_REQUEST_TIMEOUT` | 120 | HTTP 超时 |
 | `TRACE_PATH` | 空 | 会话 JSONL 落盘位置 |
 
+### 4.6 批量评测（`mcc eval`）
+
+demo 是"4 个案例各跑一次给人看"，评测层是"24 道题 × 3 次，报一个能被反驳的数字"。两边的判据是**同一份实现**（`eval/contract.py`），所以不存在"评测层顺手放宽了标准"这种分叉。
+
+```bash
+mcc eval --list                        # 24 道题各自的模式 / 判据规模 / fake 剧本
+mcc eval --lint                        # 考题自检：这道题**可能**被做对吗（送分用例、基线就红的 P2P）
+mcc eval --repeats 3                   # 默认 engine=fake：秒级、不联网、不读 .env
+mcc eval --repeats 3 --save-baseline   # 跑完写 eval/baselines/fake-<题集哈希>.json
+mcc eval --smoke                       # 6 题 live 冒烟（自动跳过 supports_live=false）
+mcc eval --engine live --budget-tokens 200000 --tag bugfix
+mcc eval --only bh-format-duration --repeats 5 --no-resume
+```
+
+**退出码就是结论**：`0` 这批可以拿去汇报；`1` 有运行崩了 / 有该做对的题没做对 / 检出退步或判据告警；`2` 用法或配置不对（一格数据都没产生）。
+
+| 产物 | 说明 |
+|---|---|
+| `eval/.work/<engine>/report.md` | 人读报表：逐题判定、失败模式分布、标签切片、与基线的差值 |
+| `.../report.json` | 同一份内容的机器形状，CI 里 `jq -e '.summary.regressions == []'` 就能拦住退步 |
+| `.../manifest.jsonl` | 一条 run 一行，**跑完即落盘** —— 断点续跑的全部依据 |
+| `.../work/<task>.r<repeat>/` | 每题每次一份独立工作副本；基线树永不被写（已进 `.gitignore`） |
+
+几条不是从嘴上来的口径：
+
+- **fake 批次同时是 gold-patch 检查**。剧本走真 agent 循环、真工具落盘、真跑 pytest，所以 `pass` 是代码给的，不是剧本声称的；`edit-verify` 改错了地方照样判红。
+- **负样本按设计判红**。题集里 4 道带 `must-fail`（改断言作弊、猜路径、只读题瞎改、宣称成功却不测试），判红才算数；被判绿会触发"判据告警"并占退出码 1。`negative` 与 `must-fail` 不是一回事 —— 前者只说"这题模拟坏行为"，后者说"判据必须抓住它"。
+- **基线按题集哈希自动匹配**。改任何一道题的题面或 fixture，哈希就变，旧基线不再被拿来对比（默认拒绝开跑；`--force` 可强行跑，但报表照旧标"无法对比"）。
+- **`|Δ| < 12.5%` 一律写"分辨不出"**。显著性用 McNemar 精确二项而不是卡方近似：n=24 时一次翻转就是 4.2%，卡方在小样本上恰好把 p 算得偏小。
+
+
 ---
 
 ## 5. 工具清单
@@ -288,9 +319,43 @@ Ctrl-C 的语义是**放弃当前输入但保留历史**：中断不该毁掉已
 
 ### 6.4 会话轨迹（trace）
 
-每一轮以 JSONL 落盘：`session_start / turn_start / llm_response / permission / tool_call / todo_update / error / run_end`。
+每一轮以 JSONL 落盘（schema 2.0）：`session_start / turn_start / llm_response / permission / tool_call / todo_update / error / run_end`。三类记录构成"度量三元组"，缺一个就有一条规则永远瞎掉：
 
-`infra/trace.py` 提供 `replay()` 与 `summarize()`，后者是 README 和 demo 证据里**所有数字的唯一来源**：轮数、工具调用数、`is_error` 数、token、调用序列、`redundant/denied`、终止原因。写报告不靠手填，也就没法手填。
+- `turn_start.est_tokens` —— 上下文增长曲线的横轴；
+- `tool_call.verdict` / `output_chars` —— 派生结论（绿/红）与"这轮吞了多少字符"；
+- `run_end` 把"发起"与"执行"分成两个量：`run_end.tool_calls` 是模型发起了几次，执行几次由 `tool_call` 记录的条数得出（`summarize()` 里叫 `tool_executed`）。被闸门拦下的那些只进前者 —— v1 用 `tool_calls` 一个名字指这两件事，报表因此在"有拒绝"的会话上自相矛盾（SPEC v2 §3.1 的 E 类修补）。
+
+`infra/trace.py` 提供 `replay()` 与 `summarize()`，后者是 README 和 demo 证据里**所有数字的唯一来源**：轮数、发起/执行的工具调用数、`is_error` 数、逐调用重复 `repeated_calls`、整组重演 `stalled_groups`、被拒 `denied_actions`、token、上下文峰值、调用序列、终止原因。写报告不靠手填，也就没法手填。
+
+`tests/test_trace_contract.py::test_metrics_have_producers` 盯着"每个键必须有生产者"：报表里出现的键，指不到一处写入它的代码就是失败。v1 的 `redundant_calls` 恒为 0（声明、快照、读取、打印四处，没有第五处 `+=`）就是这条约束缺失的代价，SPEC v2 §0.3 把它记成 E1。
+
+### 6.5 失败模式分类学与 `mcc trace`
+
+规则式而非模型式：8 条标签，每条都要能在一条真实 trace 上被人眼复核。判据宁可漏报不误报。
+
+| 标签 | 一句话判据 | 处方 |
+|---|---|---|
+| `path_guessing` | 整轮里 ≥3 个**不同路径**的 `read_file` 失败（被拒的读不算猜） | 仓库地图缺失（→ S11） |
+| `context_growth` | 单轮 token 涨幅 > 前 5 轮中位数的 3 倍、≥2000、且上一轮工具输出够解释一半 | 工具输出未截断 |
+| `no_verification` | `COMPLETED` 且**动过手**却没有一次已执行的 `run_tests`/`bash` | 自我调试提示不生效 |
+| `self_confirm` | `COMPLETED` 且最后一次验证 `verdict=red`（红过又跑绿 = 正常收敛，不贴） | 无视退出码，靠叙述收尾 |
+| `test_gaming` | `edit_file` 落在 `tests/` 且检查点变少（数 `assert` / `pytest.raises` 的个数） | 权限、提示、判据三层复查 |
+| `thrashing` | 整组调用重演（`stalled_groups > 0`） | 换假设的提示不够具体 |
+| `permission_starved` | 被拒率 > 40% 且被拒 ≥2 次，同时**没做成** | 模式选错，不是模型错 |
+| `budget_exhausted` | `MAX_TURNS` 且待办未完成 >50%，或整轮没写过任务清单 | 任务过大 / 没有计划 |
+
+```bash
+mcc trace --latest                 # 时间线
+mcc trace --latest --hot           # 最贵 3 轮、报错最多的工具、重复调用簇
+mcc trace --latest --why-failed    # 上面的标签 + 证据 + 处方
+mcc trace --file demos/traces/b4-live/bug-hunt.live.jsonl --why-failed
+```
+
+标签与人工判读是否一致，由 `python scripts/b4_label_check.py` 生成
+[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 机器核对：16 条轨迹逐条对
+"人写的期望"，不一致（**包括压根没写过期望的**）就退出码 1。它同时打印盲区 —— 字段缺失时规则
+不是判对了，是没参与。旧 trace 里落盘的 `failure_modes` 与当前规则算出的不同时，`mcc trace`
+显式印出"规则口径变过"，而不是沉默地换一套答案。
 
 ---
 
@@ -327,19 +392,26 @@ python demos/run_demo.py --all --engine live --max-turns 20
 
 | demo | 验收项 | fake | live（`agnes-2.5-flash`） |
 |---|---|---|---|
-| **Demo 1** `codegen` | A2 | PASS · 8 轮 · 9 次调用 · 0 报错 | PASS · 11 轮 · 19 次调用 · 0 报错 · 81,341 tok · 71.8s |
-| **Demo 2** `bug-hunt` | A1 | PASS · 7 轮 · 7 次调用 · 0 报错 | PASS · 6 轮 · 11 次调用 · 3 报错 · 24,994 tok · 12.6s |
-| **Demo 3** `red-tests` | A1 + 自我调试 | PASS · 10 轮 · 9 次调用 · 0 报错 | PASS · 6 轮 · 10 次调用 · 0 报错 · 33,283 tok · 15.0s |
-| **附加** `readonly-qa` | A3 | PASS · 3 轮 · 4 次调用 · 0 报错 | PASS · 5 轮 · 6 次调用 · 1 报错 · 3 次被拦 · 20,680 tok · 8.4s |
+| **Demo 1** `codegen` | A2 | PASS · 8 轮 · 9 次调用 · 0 报错 | PASS · 8 轮 · 16 次调用 · 0 报错 · 65,425 tok · 97.1s |
+| **Demo 2** `bug-hunt` | A1 | PASS · 7 轮 · 7 次调用 · 0 报错 | PASS · 9 轮 · 20 次调用 · 0 报错 · 52,017 tok · 59.8s |
+| **Demo 3** `red-tests` | A1 + 自我调试 | PASS · 10 轮 · 9 次调用 · 0 报错 | PASS · 6 轮 · 13 次调用 · 0 报错 · 36,041 tok · 31.9s |
+| **附加** `readonly-qa` | A3 | PASS · 3 轮 · 4 次调用 · 0 报错 | PASS · 4 轮 · 6 次调用 · 2 次读空 · 0 次被拒 · 14,976 tok · 12.8s |
 | **附加** `giveup` | A4 | PASS · 6 轮 · `max_turns` | 不支持（脚本化的"两次假设后收手"不是模型能力） |
 
 完整数字与 diff 见 [`demos/results/summary.fake.md`](demos/results/summary.fake.md)、[`summary.live.md`](demos/results/summary.live.md)。
+下面几段"这一趟模型到底做了什么"是**逐条读 trace** 写的，各自点名引用的是哪一批：`demos/traces/`
+顶层是最近一次 live 批次，`demos/traces/v1-baseline/` 是 v1.0 那批的留档 —— 重跑会覆盖顶层，
+旧批次靠归档目录保住，所以两种证据都能落到具体文件上。
+
+一处已知不同步：证据表格的 `tool_calls` 行在 S8 结束时改成"发起 / 执行"两栏，`*.fake.md` 已按新
+格式重生成，`*.live.md` 还是旧格式（重生成要花真 token）—— 数字本身两边一致，只是排版口径差一版，
+下一次 `--engine live` 批次自动对齐。
 
 #### Demo 1 · 从零生成一个带测试的模块（A2）
 
 任务只有一句话：创建 `calculator` 包，提供四则运算和 `evaluate("2 + 3 * 4")`，乘除优先、不支持括号、除零抛 `DivideByZeroError`，写完整 pytest 并跑到全绿。
 
-工作副本里除了一个 `README.md` 什么都没有。判据不看它写了几个文件，而是独立脚本喂进一批表达式对答案。live 那次写了 2 个测试文件、收集到 39 个用例、退出码 0；中途 `run_tests` 红过一次，它接着用 `bash python -m pytest tests/ -v` 把失败面看全，然后 `edit_file` 修解析器、再 `run_tests` 转绿，最后才补 README 并复跑一次确认。
+工作副本里除了一个 `README.md` 什么都没有。判据不看它写了几个文件，而是独立脚本喂进一批表达式对答案。live 那次（`demos/traces/codegen.live.jsonl`，8 轮 16 次调用）先立待办、`mkdir`，第 3 轮一次写出 `calculator/__init__.py`、`calculator/core.py`、`tests/__init__.py`，第 4 轮补上 `tests/test_calculator.py` 并用 `bash python -m pytest` 跑出红；第 5、6 轮两次 `edit_file` 都落在**实现** `calculator/core.py` 的 `_tokenize` / `_parse_add_sub` 上，第 6 轮转绿（2 个测试文件、39 个用例、退出码 0），然后才写 README 并把待办逐项勾掉。测试从写出到收尾没有被回改 —— "不许靠改断言变绿"这条判据在 trace 层面也对得上（`drops_assert` 全为 False）。
 
 #### Demo 2 · 在陌生仓库按一句话描述修 bug（A1，生死线）
 
@@ -347,19 +419,25 @@ python demos/run_demo.py --all --engine live --max-turns 20
 
 难点在于 bug 不在任何红色 traceback 里 —— 现有测试最大只覆盖到 3599 秒，跨过天的分支从未被执行。模型只能靠 README 的承诺 + 读代码定位到 `divmod(total, SECONDS_PER_HOUR)` 用错常量。
 
-live 的 3 次 `is_error` 是它猜路径猜空了（`src/format.py`、`src/test_format.py`、`src/__init__.py`），`find_files **/*.py` 之后就不猜了 —— 这恰好是提示词里"不确定就先调查"的行为证据。它把回归测试**追加**进已有的 `tests/test_format.py`，所以 Demo 2 的判据是"基线断言逐行保留、只增不删"，而不是"tests/ 逐字节不变"。
+最近这批 live（`demos/traces/bug-hunt.live.jsonl`，9 轮 20 次调用、`is_error` 0）第 1 轮就把 `duration/format.py`、`tests/test_format.py` 一次读到位，第 3 轮改实现 + 往 `tests/test_format.py` **追加**参数化的负数用例，同轮 `run_tests` 绿。值得看的是第 5、6 轮：它对 `duration/format.py`（一个实现文件，不是测试文件）直接跑 pytest，`verdict` 老老实实记成 red，随后第 7、8 轮改用 `tests/test_format.py` 与 `tests/` 跑，一路绿到收尾 —— 红了就回去验，而不是把红说成绿。
+
+同一条轨迹的**上一批**（`demos/traces/v1-baseline/bug-hunt.live.jsonl`）留了另一种证据：连猜 3 个 `src/` 下的不存在路径才 `find_files`。失败分类学把它标成 `path_guessing`，人工核对见 [`demos/results/failure-labels.md`](demos/results/failure-labels.md) —— 这正是提示词里"不确定就先调查"那条约束的量化形状。
+
+它把回归测试**追加**进已有的 `tests/test_format.py`，所以 Demo 2 的判据是"基线断言逐行保留、只增不删"，而不是"tests/ 逐字节不变"。
 
 #### Demo 3 · 测试红了之后自动修到绿（自我调试）
 
 `demos/fixtures/red-tests` 基线 `1 failed, 16 passed`。第一个 bug 是优惠券 `BULK10: 0.01`（应为 `0.1`）；修好之后测试**仍然红**，因为断言链上还藏着第二个 bug —— 税费按 `subtotal` 算而 README 规定按折扣后金额算。
 
-live 那次的路径是：`bash`（先自己跑了一遍 pytest 看红在哪）→ 读 5 个文件 → `edit_file` 改优惠券 → `run_tests` **仍然红** → `edit_file` 改税基 → `run_tests` 17 passed。6 轮 10 次调用，`is_error` 一次都没有 —— 第二次 `run_tests` 是"红了"，不是"工具坏了"。判据同时要求 `tests/` 原有文件**逐字节未变**，也就是说它不许通过改断言来变绿。
+live 那次（`demos/traces/red-tests.live.jsonl`，6 轮 13 次调用）的路径是：读 8 个文件把优惠券与税单两头看清楚 → `run_tests` **红**、同一轮再读一眼 `cart/__init__.py` 确认导出 → `edit_file` 改优惠券 `BULK10: 0.01 → 0.10` → `edit_file` 改税基 → `run_tests` 17 passed。全程 `is_error` 一次都没有 —— 第 3 轮那次 `run_tests` 是"测试红了"（`ok=True`、`verdict=red`），不是"工具坏了"，v2 的 trace 把这两件事分成两个字段记。判据同时要求 `tests/` 原有文件**逐字节未变**，也就是说它不许通过改断言来变绿。
+
+同一份 fixture 的上一个批次（`demos/traces/v1-baseline/red-tests.live.jsonl`）开头是先 `bash` 自己跑一遍 pytest 看红在哪，再动手读代码 —— 两条路都收敛到绿，这正是 `self_confirm` 规则要求"最后一次验证必须是绿"而不看模型怎么讲的理由。
 
 #### 附加 · 只读模式答"这段代码对不对"（A3）
 
 同一个 `bug-hunt` 仓库、同一个 bug，但这次权限模式是 `readonly`，任务只要分析。判据第一条就是运行前后工作区哈希相同（`66e7e20db481` → `66e7e20db481`），确实一字节没写。
 
-live 轨迹里模型三次试图 `bash` 跑代码复现，全被拦下，于是它改成"从代码直接推理"并给出了正确的 `3600/86400` 对照 —— 被拒之后换路走，而不是重复请求。
+最近这批 live（`demos/traces/readonly-qa.live.jsonl`，4 轮 6 次调用）模型压根没试图写东西：猜空两个路径（`format.py`、`test_format.py`）后 `find_files **/*.py` 列了目录，再按真路径读到位，答案命中 `3600/86400` 对照。**被拦下之后换路走**这条行为证据在上一批里（`demos/traces/v1-baseline/readonly-qa.live.jsonl`）：同一个只读模式下它三次 `bash` 想跑代码复现，全被闸门拒掉（`denied_actions = 3`），于是改成"从代码直接推理"并给出同样正确的答案 —— 拒绝没有让它重复请求，也没有让它停住。
 
 #### 附加 · 需求自相矛盾时放弃（A4）
 
@@ -372,19 +450,37 @@ live 轨迹里模型三次试图 `bash` 跑代码复现，全被拦下，于是�
 ## 8. 测试
 
 ```bash
-python -m pytest -q                # 195 passed
+python -m pytest -q                # 382 passed
 python -m pytest tests/test_loop_with_fake_llm.py -q
+python -m pytest tests/test_eval_runner.py tests/test_eval_cli.py -q   # 评测层（不联网）
+python scripts/b4_label_check.py   # 失败模式标签的人工核对，退出码 0 才算过
+mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 ```
 
 | 文件 | 覆盖 |
 |---|---|
 | `test_loop_with_fake_llm.py`（25） | 全量回填与顺序、多轮工具链、轮数/token 止损、上下文超预算、停滞与空响应重试、未知工具、参数畸形的 tool_call、路径逃逸、只读拦截、连续拒绝、自我调试直到转绿、事件与轨迹 |
 | `test_tools.py`（43） | 每个工具的正常路径与失败形态：越界路径、目录当文件读、非法正则、无匹配、`old_string` 不唯一/不匹配、bash 超时、**非零退出算观测不算工具报错**、参数校验、多余参数丢弃、注册表去重 |
-| `test_permissions.py`（17） | 三种模式 × 三种风险、路径锁在所有模式下生效、破坏性命令在 AUTO 下仍拒、写 `.env` 需显式放行、会话级授权不能吞掉密钥警告、无确认渠道时失败关闭 |
-| `test_demos.py`（18） | 5 个 demo 离线跑通、工具确被执行、证据含 SPEC §3.7 字段且无密钥、fixtures 跑完仍纯净、两个 bug 的前提未被顺手修掉、A1–A4 全覆盖 |
+| `test_failure_rules.py`（44） | 8 条失败模式规则各自的命中与**不命中**：真实形状逐条钉住（含"context_growth 在旧 schema 上彻底失明"这条已知盲区），并检查 `scripts/b4_label_check.py` 的 EXPECT 覆盖到盘上每一条 trace |
+| `test_cli.py`（29） | `build_session` 装配、密钥不进 trace 与提示词、REPL 分发与 EOF/Ctrl-C、渲染逐行语义（一行一次调用、标签取识别参数、被拒才打印）、一次性任务的退出码映射、确认器答复翻译 |
+| `test_eval_metrics.py`（22） | 报表 25 个键逐个重算（`steps_to_success_median`、`wasted_output_ratio`、p95 都手算对一遍）、键名集合快照与 SPEC §3.2 同步、Wilson 区间手算值、`per_tag` 里结构性失败不许被抹平、空批 |
+| `test_eval_regression.py`（21） | 基线对比四条：考卷变了**只拒绝对比不给 Δ**、逐题翻红才算 blocker、McNemar 精确二项的手算值、`must-fail` 判绿出"判据告警"、"没做对比 ≠ 没有差异" |
+| `test_eval_judge.py`（19） | 十步判据逐条独立验：作弊判据排第一、白名单内外口径分开、`probe` 与 `verify_cmd` 只认退出码（打印 SUCCESS 不算过）、只读题碰盘即 fail、8 种终止原因参数化全覆盖 |
+| `test_eval_cli.py`（19） | `mcc eval` 退出码三档各有真走到的用例、fake 引擎不碰 `.env`、基线按哈希自动匹配、哈希不符时拒绝开跑与 `--force` 照跑仍标"无法对比"、`must-fail` 与 `negative` 在终端上的分工 |
+| `test_eval_taskset.py`（17） | 题集契约：未知字段/无判据/驱动名不存在一律拒绝加载、**题面不许泄漏答案**（gold 与 probe 都不许出现在 instruction 里）、只读题必须有答复关键字、`edit/write` 剧本必须真跑测试、`lint_task` 认送分题 |
+| `test_eval_runner.py`（15） | gold patch 真把用例翻绿（错 patch 判红）、篡改考卷被 `protected` 抓、工作副本隔离且基线树跑一百次不动、manifest 逐条落盘 / 续跑不重跑 / 旧哈希记录作废并提示、批次预算到点即停、装配失败只崩这一题不崩整批 |
 | `test_openai_compat.py`（19） | 报文形状（tools 声明、tool_result 配对顺序与 name）、arguments 字符串解析、可重试状态码与传输错误、4xx 不重试、usage 归一化、`LLMClient` 协议一致 |
-| `test_prompts.py` | 环境事实是否被注入（Windows/POSIX 各钉一批关键词）、工具清单回灌、仓库地图行数上限 |
-| `test_context.py` `test_trace.py` `test_planner.py` `test_cli.py` | 估算与实测校准、轨迹脱敏与 summarize、清单不变量、`build_session` 装配、REPL 分发、退出码映射 |
+| `test_demos.py`（18） | 5 个 demo 离线跑通、工具确被执行、证据含 SPEC §3.7 字段且无密钥、fixtures 跑完仍纯净、两个 bug 的前提未被顺手修掉、A1–A4 全覆盖 |
+| `test_permissions.py`（17） | 三种模式 × 三种风险、路径锁在所有模式下生效、破坏性命令在 AUTO 下仍拒、写 `.env` 需显式放行、会话级授权不能吞掉密钥警告、无确认渠道时失败关闭 |
+| `test_planner.py`（13） | 清单不变量、回填、状态机 |
+| `test_trace_cli.py`（12） | `mcc trace` 渲染：时间线/热点/`--why-failed`、schema 不匹配时点名缺哪些字段、旧 trace 落盘标签与当前规则不一致时打印"规则口径变过" |
+| `test_prompts.py`（12） | 环境事实是否被注入（Windows/POSIX 各钉一批关键词）、工具清单回灌、仓库地图行数上限 |
+| `test_trace.py`（10） | 落盘与脱敏、replay 容忍非对象 JSON、summarize 只读已记录的字段 |
+| `test_context.py`（10） | 估算与实测校准、压力分档 |
+| `test_trace_contract.py`（11） | **度量契约**：每个报表键都有生产者、发起数≠执行数、在线与离线分类共用同一份定义、schema 快照、`output_chars` 只能从 `tool_call` 记录加出来（含"省略量为 0 是真算了 0"这条）、"孤儿键"检测器自己能抓到 planted 样例 |
+| `test_hanoi.py`（6） | 外部引入的算法测试，与 Agent 主线无关，保留原样 |
+
+评测层那六个文件用的是 `tests/test_eval_runner.py` 里的**临时玩具题集**（一个算错的 `add`），不依赖 `eval/fixtures` 的 24 道真考题 —— 考题内容改了不需要跟着改测试，而跑批器自己的契约仍然被钉住。真题集只在 `test_eval_taskset.py` 里被结构性地检查（题面不泄漏答案、判据齐不齐）。
 
 `tests/fakes.py` 提供 `FakeLLM`：按脚本吐响应，不联网。**没有真实 API 也能测完整个循环**，这是 SPEC §6.2 里"不要因为没有真实 API 就跳过测试"这条的执行方式。
 
@@ -401,7 +497,9 @@ python -m pytest tests/test_loop_with_fake_llm.py -q
 - **端点行为依赖。** `tools` 字段偶发被吞，所以工具清单在系统提示里又列了一遍。
 - **`rich` 是可选依赖**，缺失时渲染层自动退化成纯文本，功能不变。
 - **Windows 上 `bash` 工具优先走 Git Bash。** 没有 bash 时退到 `cmd.exe`，此时提示词里那套 Unix 习惯（`&&`、`/dev/null`）就不成立了 —— 提示词分了两层说明。
-- **只支持 Python 项目的 `run_tests`。** 多语言是架构无关的待办，不是已交付能力。
+- **只支持 Python 项目的 `run_tests`。** 多语言是架构无关的待办，不是已交付能力。评测层同一局限：`eval/fixtures` 与判据全建立在 pytest 上（用例级白名单、`--collect-only` 的 node id），换个语言栈就得另写一套判据原语。
+- **`pass@1=4/6` 那个数不能当结论用。** 6 题的 Wilson 95% 区间是 `[0.300, 0.903]` —— 宽到容得下两种相反的说法。live 冒烟证明的是"管线跑得通、判据抓得住真失败"，不是"这个 agent 有 67% 的成功率"。全量 24 题的 live 批次要花的额度大约是这次的四倍。
+- **批次预算的闸只在任务边界生效**，所以最后一题可以合法地把整批顶过线（实测：预算 300,000，实际 313,812）。要硬上限得再加一层单请求级熔断，那是 S10 上下文预算的一部分。
 
 ---
 
@@ -418,7 +516,9 @@ python -m pytest tests/test_loop_with_fake_llm.py -q
 | 5 | 系统提示词里的 Windows 建议是错的 | 原写"丢弃输出用 `>NUL`，不是 `>/dev/null`"，但 `bash` 工具优先 Git Bash，模型照做就在 Git Bash 里真建出一个名叫 `NUL` 的文件，Windows 保留设备名导致它无法正常删除，污染工作区 | 环境事实必须与实际执行器一致：以 Git Bash 为准，`>NUL` 降级为"没有 bash 时的退路" | 已改 `prompts.py`，`test_prompts.py` 钉住新事实，`prepare()` 增删除兜底 |
 | 6 | 嵌套 pytest 静默收集 0 用例却报"退出码 0" | 判定脚本在 fixture 副本里跑 pytest 时继承了 `testpaths` 与仓库根 `conftest.py` 的 `collect_ignore_glob`，等于把"考卷"忽略了 | demo 判据必须显式隔离配置并校验收集数 | `--confcutdir .` + 显式目标 + "0 收集 ⇒ 退出码 5" |
 | 7 | Demo 2 判据"tests/ 逐字节不变"与任务"补回归测试"矛盾 | 任务同时要求补测试和不许删断言，字节级不变太严 | §1.3 明确 A1 的 tests/ 判据是"基线内容保留"（只增不删） | 新增 `subset_only_added`，Demo 3 仍用逐字节 |
-| 8 | 终端摘要与证据表格数字不一致 | 被权限门拦下的调用会进 `state.tool_calls`，但不产生 trace 的 `tool_call` 记录 | 所有对外数字统一从 trace 派生 | 命令行摘要改用同一份 stats，并单列"被拦"数 |
+| 8 | 终端摘要与证据表格数字不一致 | 被权限门拦下的调用会进 `state.tool_calls`，但不产生 trace 的 `tool_call` 记录 | 所有对外数字统一从 trace 派生 | 命令行摘要改用同一份 stats，并单列"被拦"数；v2 的 S8 把这件事做成命名：发起数 `run_end.tool_calls` 与执行数 `tool_executed`（由 `tool_call` 条数得出）两个量各归各位，`test_trace_contract.py` 钉住"两个数不是一回事" |
+| 9 | S9 计划里的 `--compare <file>` / `--tag <name>` 与 `mcc eval-ab` / `mcc sbs` 落不了地 | 基线的身份就是"这张考卷的成绩"，再起一个 tag 名只会引入"拿错基线"这条错误路径；`eval-ab` 需要的配置注入面（`REPO_MAP=off/on`）在 S11 才存在 | SPEC v2 §3.2 增补 as-built 表 | 改成 `eval/baselines/<engine>-<题集哈希>.json` 自动匹配；`eval-ab`/`sbs` 顺延到 S11/S14，不留空壳 |
+| 10 | 负样本标签 `negative` 语义不唯一，第一次跑真批次就出了两条误告警 | "模拟坏行为的题"与"判据必须抓住的题"被塞进同一个标签；`bh-repeat-stall` 老实停下来本该判绿，却被叫成"判据没抓到" | 拆成两层：`negative`（描述性）与 `must-fail`（判据自检） | 新增 `must-fail`，`instrument_checks` 只对其告警；4 道题补标，题集哈希随之变化 |
 
 ---
 
@@ -427,7 +527,8 @@ python -m pytest tests/test_loop_with_fake_llm.py -q
 ```
 mini-claude-code/
 ├── main.py                     零安装入口
-├── SPEC.md                     设计契约（先讨论后实现）
+├── SPEC.md                     v1.0 设计契约（先讨论后实现）
+├── SPEC-v2.md                  v2.0 增量规格：度量先行，S8–S16 路线图
 ├── pyproject.toml              mcc 命令、可选 rich、pytest 配置
 ├── conftest.py                 把故意红/带 bug 的 fixtures 挡在收集范围外
 ├── src/miniclaude/
@@ -438,14 +539,33 @@ mini-claude-code/
 │   ├── agent/                  loop / planner / prompts / permissions
 │   │                           / context / state / todo_tool
 │   ├── cli/                    build_session、REPL、渲染（rich 可选）
-│   └── infra/trace.py          JSONL 轨迹、replay、summarize
-├── tests/                      195 项，FakeLLM 驱动，不联网
+│   │                           / trace_cmd（`mcc trace` 三个视图）
+│   │                           / eval_cmd（`mcc eval` 批跑入口，退出码=结论）
+│   ├── infra/
+│   │   ├── trace.py            JSONL 轨迹、replay、summarize、密钥脱敏
+│   │   └── failure.py          失败模式分类学（8 条规则，在线/离线共用）
+│   └── eval/                   评测层（S9）
+│       ├── taskset.py          题集加载与内容哈希，未知字段一律拒绝
+│       ├── contract.py         判据原语：隔离副本、用例级白名单、只增不删（与 demo 共用）
+│       ├── judge.py            十步固定顺序的判定流水线 + `lint_task` 考题自检
+│       ├── drivers.py          fake 引擎的剧本（复用 demos/fake_scripts，不联网）
+│       ├── runner.py           串行批跑、manifest 续跑、批次预算闸
+│       ├── metrics.py          pass@1 / pass@k / Wilson 区间 / 失败模式分布
+│       └── regression.py       基线读写与逐题配对比较、判据自检
+├── eval/
+│   ├── tasks/                  24 道考题（题面不泄漏修法；负样本标 must-fail）
+│   ├── fixtures/               被刻意做成有 bug / 测试是红的小仓库（考题的靶子）
+│   ├── baselines/              `fake-<题集哈希>.json` —— B1 的基线，进版本库
+│   ├── results/                live 冒烟的报表与轨迹（live 数字不可复现，所以入库）
+│   └── .work/                  工作副本与逐条记录（忽略，报表与基线才提交）
+├── scripts/                    probe_caps / probe_window / b4_label_check 等证据生成器
+├── tests/                      382 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照）
 └── demos/
     ├── run_demo.py             隔离副本 → 跑真 Agent → 独立判据 → 生成证据
     ├── fake_scripts.py         FakeLLM 轨迹（脚本化，不报自述数字）
     ├── fixtures/               greenfield / bug-hunt / red-tests / contradiction
-    ├── results/                证据（README 的数字都来自这里）
-    └── traces/                 每次运行的 JSONL
+    ├── results/                证据（README 的数字都来自这里；v1-baseline/、b4-live/ 是归档批次）
+    └── traces/                 每次运行的 JSONL（顶层=最近一次，v1-baseline/ 与 b4-live/ 冻结留档）
 ```
 
 ---
@@ -453,6 +573,10 @@ mini-claude-code/
 ## 12. V2 建议
 
 按投入产出排序：
+
+> 本节是 v1.0 收尾时写的展望。**v2.0 的实际计划以 [`SPEC-v2.md`](SPEC-v2.md) 为准**：下面第 1、2 项
+> 分别对应 S10/S11（压缩阶梯、仓库地图）与 S9（`eval/` 评测层），S8 已经先把"数字怎么来的"这件事
+> 修成可核对的口径（§6.4、§6.5）。
 
 1. **上下文压缩 + `memory/repo_map.py`**（解锁大仓库）。压缩必须保 `tool_calls`/`tool` 配对，且压缩前后跑同一批回归测试，否则就是把 400 换成静默变笨。
 2. **`eval/` 层：把 demo 判据变成可批量跑的评测**。`AgentResult` 的形状现在就定死了，V2 直接消费，不用回改核心循环。目标是从"4 个 demo 各跑一次"升级到"20 个任务 × 5 次，报通过率与方差"。

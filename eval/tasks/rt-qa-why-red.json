@@ -1,0 +1,26 @@
+{
+  "id": "rt-qa-why-red",
+  "instruction": "只读，不要修改任何文件。`tests/test_checkout.py::test_bulk_purchase_checkout` 现在是红的。它红的**两个**原因分别是什么？每个原因都要给出具体数字：README 期望多少、代码实际算出多少、是哪一行造成的。",
+  "source": { "kind": "vendored", "path": "demos/fixtures/red-tests" },
+  "answer_keywords": [
+    "1.25",
+    "10.00|10.0",
+    "COUPONS|BULK10",
+    "taxable_amount|折后|折扣后|折扣后的金额"
+  ],
+  "mode": "readonly",
+  "expected_termination": "completed",
+  "tags": ["readonly", "root-cause", "multi-bug"],
+  "max_turns": 8,
+  "token_ceiling": 60000,
+  "difficulty": 2,
+  "supports_live": true,
+  "fake": {
+    "driver": "answer",
+    "args": {
+      "read": ["README.md", "cart/pricing.py", "tests/test_checkout.py"],
+      "text": "原因一：`cart/pricing.py` 里 `COUPONS = {\"BULK10\": 0.01, \"WELCOME\": 0.05}`，README 说 BULK10 是 10% off，这里写成 1%，所以折扣是 1.25 而不是期望的 12.50。原因二：`checkout()` 里 `tax = round(subtotal * TAX_RATE, 2)` 用打折前的小计计税，算出 10.00，而 README 规定税基是折扣后的金额 —— 同一个文件里已经有 `taxable_amount(125.0, 12.5) == 112.5` 这个函数（`test_tax_base_is_after_discount` 正测着它），只是没被调用，正确税额是 9.00。所以实际 total 是 133.75，用例期望 121.50。"
+    }
+  },
+  "notes": "与 rt-checkout-bulk 同一个 bug、两种问法：一个是「修好」，一个是「只许说清楚」。问法这道题的判据完全不碰代码改动，只读答复里的事实数字 —— 少报一个原因就会因为缺 `10.00` 或 `1.25` 判坏。"
+}
