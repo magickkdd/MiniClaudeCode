@@ -23,7 +23,7 @@
 
 注意最后那句自我更正：**优先级 bug 是测试抓出来的，不是模型看出来的**。这就是 `run_tests` 作为判据而不是装饰的意义。
 
-当前状态：**723 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，判据账本（fake 侧 12 条 + live 侧 2 条，另 1 条按未量记账）与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)；真实端点那 5 次已于 2026-09-23 补跑并签完（27 个请求、阶梯 5/5 条 run 都动手、**因配对破损导致的 400 = 0**），但"压缩后成功率 ≥60%"这一句改按**未量**记账 —— 高预算区间实测两趟结论相反（[`eval/results/b2-live-budget-probe.json`](eval/results/b2-live-budget-probe.json)），那句口径量的是模型不是阶梯，见 §4.7 末；2026-09-22 那次被 `HTTP 429` 打断的过程与一个已修的 `--only` bug 记在 [`eval/results/b2-live-blocked.json`](eval/results/b2-live-blocked.json)；S11 交付了仓库符号地图与 `.mcc/` 工作记忆（见 §4.8）：两臂只差 `--no-repo-map` 一个开关，7 条机制判据（地图**换掉**目录树、地图计入 `context_peak`、零额外 LLM 调用、两臂 system 不同）离线全绿；真实模型那半条跑完了，结论是 **B3 未达成** —— token 侧 ✓（`context_peak` p95 涨幅 +5.4%，线是 ≤15%），轮数侧 ✗（`steps_to_success` 中位 6.0 → 6.0，降幅 0%，线是 ≥20%），通过数还从 14/18 掉到 13/18。这是一次有效的证伪而不是无效实验（脚本先证明了配对成立），20% 这条线保持原样，重测计划记在 SPEC §7.3-5，全部数字见 [`eval/results/b3-repomap-ab.json`](eval/results/b3-repomap-ab.json)。 S12（只读工具并发）在动手前被自己的数据闸砍进 Tier 3：可并行的只读轮只值 live 墙钟的 0.011%（§4.9）。S13 交付了执行后端：`ExecutionBackend` 两实现（local / docker）+ 影子 git 检查点 + `mcc resume` 的幂等续跑，**B6 达成** —— 同一批题在两后端上判定逐格一致 12/12，8 条前提全绿，而这台机器上没有 docker，所以那半条线是被一个"会真的在宿主上执行命令"的假 docker 证掉的，`container_isolation_tested: false` 就是这句话（§4.10、[`eval/results/b6-backend-ab.json`](eval/results/b6-backend-ab.json)）。S14 交付了第三方能力：`ext/mcp.py`（stdio 桥、`mcp__` 命名空间、远端自报风险一律不信）与 `ext/skills.py`（常驻只有目录、正文按需展开），§3.7 的 6 项安全测试扩到 85 项，证据脚本 **20/20 条前提全绿**、对手是"自写的敌意服务 + 官方 SDK 服务"两个（§4.11、[`eval/results/s14-mcp-skills.json`](eval/results/s14-mcp-skills.json)）；LangGraph 那一半交付的是 ≤200 行的概念对照与不用它的理由（[`docs/framework-equivalence.md`](docs/framework-equivalence.md)）。S15-a 是多 Agent 那一格的**第二次动手前砍单**：`spawn_agent` 的前置条件（D21「未收尾/自我确认过早占比 > 20%」）被 `scripts/probe_verifier_gate.py` 在 75 次 live 运行上量成 **1/75 = 1.3%**（D21 点名的 B1 fake 批自己也只有 12/72 = 16.7%），12 条前提全绿、verdict=cut，S15 交付物改为只剩 §3.9 的轨迹导出器；测量顺带钉出两处口径缺陷 —— 分子记的是行为不是代价（命中的 run 全部判 pass），以及 §3.8 那句"200 行 pytest 输出"在盘上只出现在模型**绕开** `run_tests` 用 `bash` 直跑 pytest 的那 2 次（结构化那条路 95 次调用单次最大 4,263 字符）（§4.12、[`eval/results/s15-verifier-gate.json`](eval/results/s15-verifier-gate.json)）。S15-b 交付了 §3.9 的轨迹导出器 `mcc export-rl`（§4.13）：13 个批次 206 次运行 → 1,034 行 `(state, action, reward)`、**丢弃 0**、12/12 条自证前提全绿（[`eval/results/s15-export.json`](eval/results/s15-export.json)）。它的核心结论是**这批数据不够训**：trace 按设计不含观测正文，所以 1,034 行里只有 314 行带正文，其余 720 行（69.6%）是结构指纹（S13 之前的批次结构性地没有快照）；导出器顺带抓出三处数据完整性缺陷（两处在上游、一处是它自己首版的越界）—— manifest 与 trace 重跑后不再一一对应（首跑 28 个 run 因此在导出前被丢弃，已修在 `append_manifest` 源头）、`steps_from()` 把拒载轮当成一步导致"死在预算线上"的 run 被整条丢弃（修在导出器 + 一条回归）、以及快照查找曾越出批次目录。**Tier 3 的 §7.3-7 已经在同一天做完**（manifest ↔ trace 同一性）：`append_manifest` 现在在唯一的落盘出口给那份轨迹盖内容指纹（行数 + 字节 + 全文件 sha256 前 16 位）并附相对批次目录的路径，导出器在 join **之前**比对 —— 指纹不符整条丢弃（丢弃码 `trace-drift`），没有指纹的 12 个历史批次标 `unverified` 且逐行自述，审计端两条新前提里有一条是**回读磁盘重算**的，所以"导出之后有人改文件"会响（§4.13 末、SPEC §7.3-7）。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
+当前状态：**828 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，判据账本（fake 侧 12 条 + live 侧 2 条，另 1 条按未量记账）与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)；真实端点那 5 次已于 2026-09-23 补跑并签完（27 个请求、阶梯 5/5 条 run 都动手、**因配对破损导致的 400 = 0**），但"压缩后成功率 ≥60%"这一句改按**未量**记账 —— 高预算区间实测两趟结论相反（[`eval/results/b2-live-budget-probe.json`](eval/results/b2-live-budget-probe.json)），那句口径量的是模型不是阶梯，见 §4.7 末；2026-09-22 那次被 `HTTP 429` 打断的过程与一个已修的 `--only` bug 记在 [`eval/results/b2-live-blocked.json`](eval/results/b2-live-blocked.json)；S11 交付了仓库符号地图与 `.mcc/` 工作记忆（见 §4.8）：两臂只差 `--no-repo-map` 一个开关，7 条机制判据（地图**换掉**目录树、地图计入 `context_peak`、零额外 LLM 调用、两臂 system 不同）离线全绿；真实模型那半条跑完了，结论是 **B3 未达成** —— token 侧 ✓（`context_peak` p95 涨幅 +5.4%，线是 ≤15%），轮数侧 ✗（`steps_to_success` 中位 6.0 → 6.0，降幅 0%，线是 ≥20%），通过数还从 14/18 掉到 13/18。这是一次有效的证伪而不是无效实验（脚本先证明了配对成立），20% 这条线保持原样，重测计划记在 SPEC §7.3-5，全部数字见 [`eval/results/b3-repomap-ab.json`](eval/results/b3-repomap-ab.json)。 S12（只读工具并发）在动手前被自己的数据闸砍进 Tier 3：可并行的只读轮只值 live 墙钟的 0.011%（§4.9）。S13 交付了执行后端：`ExecutionBackend` 两实现（local / docker）+ 影子 git 检查点 + `mcc resume` 的幂等续跑，**B6 达成** —— 同一批题在两后端上判定逐格一致 12/12，8 条前提全绿，而这台机器上没有 docker，所以那半条线是被一个"会真的在宿主上执行命令"的假 docker 证掉的，`container_isolation_tested: false` 就是这句话（§4.10、[`eval/results/b6-backend-ab.json`](eval/results/b6-backend-ab.json)）。S14 交付了第三方能力：`ext/mcp.py`（stdio 桥、`mcp__` 命名空间、远端自报风险一律不信）与 `ext/skills.py`（常驻只有目录、正文按需展开），§3.7 的 6 项安全测试扩到 85 项，证据脚本 **20/20 条前提全绿**、对手是"自写的敌意服务 + 官方 SDK 服务"两个（§4.11、[`eval/results/s14-mcp-skills.json`](eval/results/s14-mcp-skills.json)）；LangGraph 那一半交付的是 ≤200 行的概念对照与不用它的理由（[`docs/framework-equivalence.md`](docs/framework-equivalence.md)）。S15-a 是多 Agent 那一格的**第二次动手前砍单**：`spawn_agent` 的前置条件（D21「未收尾/自我确认过早占比 > 20%」）被 `scripts/probe_verifier_gate.py` 在 75 次 live 运行上量成 **1/75 = 1.3%**（D21 点名的 B1 fake 批自己也只有 12/72 = 16.7%），12 条前提全绿、verdict=cut，S15 交付物改为只剩 §3.9 的轨迹导出器；测量顺带钉出两处口径缺陷 —— 分子记的是行为不是代价（命中的 run 全部判 pass），以及 §3.8 那句"200 行 pytest 输出"在盘上只出现在模型**绕开** `run_tests` 用 `bash` 直跑 pytest 的那 2 次（结构化那条路 95 次调用单次最大 4,263 字符）（§4.12、[`eval/results/s15-verifier-gate.json`](eval/results/s15-verifier-gate.json)）。S15-b 交付了 §3.9 的轨迹导出器 `mcc export-rl`（§4.13）：13 个批次 206 次运行 → 1,034 行 `(state, action, reward)`、**丢弃 0**、12/12 条自证前提全绿（[`eval/results/s15-export.json`](eval/results/s15-export.json)）。它的核心结论是**这批数据不够训**：trace 按设计不含观测正文，所以 1,034 行里只有 314 行带正文，其余 720 行（69.6%）是结构指纹（S13 之前的批次结构性地没有快照）；导出器顺带抓出三处数据完整性缺陷（两处在上游、一处是它自己首版的越界）—— manifest 与 trace 重跑后不再一一对应（首跑 28 个 run 因此在导出前被丢弃，已修在 `append_manifest` 源头）、`steps_from()` 把拒载轮当成一步导致"死在预算线上"的 run 被整条丢弃（修在导出器 + 一条回归）、以及快照查找曾越出批次目录。**Tier 3 的 §7.3-7 已经在同一天做完**（manifest ↔ trace 同一性）：`append_manifest` 现在在唯一的落盘出口给那份轨迹盖内容指纹（行数 + 字节 + 全文件 sha256 前 16 位）并附相对批次目录的路径，导出器在 join **之前**比对 —— 指纹不符整条丢弃（丢弃码 `trace-drift`），没有指纹的 12 个历史批次标 `unverified` 且逐行自述，审计端两条新前提里有一条是**回读磁盘重算**的，所以"导出之后有人改文件"会响（§4.13 末、SPEC §7.3-7）。**Tier 3 的 §7.3-3 也做完了**（OTLP 导出器，§4.14）：`infra/otel.py` 只做翻译、不引入 OTel SDK（这条由一条测试同时查 `sys.modules` 与 grep `src/` 钉住），24 份已入库轨迹 → 480 个 span / 8,987 个属性 / 103 个属性名，逐字段核对 6,964 个值**丢失 0**、213 个 null 按"属性缺席 + 计数"记账（协议里没有 null 这个值），边类 436 条声明 436 条兑现、0 条改线，`mcc trace --otel` 与库调用产出同形，18 条判据 **17 ✓ + 1 条未量**（未量那条的理由是**量出来的**：脚本默认往 `localhost:4318` POST 一份**手写 4 条记录**翻出的最小 payload，2,987 B、0 个仓库路径，回 HTTP 502 空响应体 —— 有人应答但不说 OTLP，既不能记成"被拒"也不能记成"收下"），10 个变异探针各自能把对应的错抓红，代价是 payload 比 trace 大 ×1.91，**0 个模型请求**（[`eval/results/t3-otlp.json`](eval/results/t3-otlp.json)）。这一格顺带抓出四处"缺席 ≠ 空串 ≠ 默认值"的真错（空串冒充值、v1 轨迹的资源属性只看得到 `span.records` 因而把"一个会话三个模型"报成 0 个、只挂 event 的 span 报空 kind 清单、`schema_version` 缺省时拿当前版本替 v1 轨迹撒"2.0"），外加 `-m` 入口永远退 0 与 `--out` 在 Windows 上把同一个 JSON 写成两个指纹两处（§10 第 31–34 行）；**第五处在这份证据自己身上** —— 它写着"一次都没试"，同时又在判据详情里背了一句"4318 回 502"（§10 第 35 行）。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
 
 ---
 
@@ -452,6 +452,44 @@ mcc export-rl --batch eval/.work/fake --batch eval/.work/b6-ab/local ... `
 
 ---
 
+### 4.14 接 Jaeger 之前先证明翻译没骗人：OTLP 导出器（`infra/otel.py`，§7.3-3）
+
+SPEC v2 §3.1 从第一天就把话说死：**埋点代码不引入 OTel SDK**，"能接入 Jaeger"是导出器的一层翻译，不是全项目的架构前提。这一节把那层翻译补上，并给规格那句「这一步只有翻译」标了价。证据不证明"能导出"（94 条单测已经证明），它证明的是翻译**没丢、没编、没自作主张**。
+
+```powershell
+mcc trace <会话> --otel                                        # OTLP/JSON 打到 stdout
+mcc trace <会话> --otel --out trace.otlp.json                  # 落盘
+mcc trace <会话> --otel --endpoint http://localhost:4318/...   # 校验不过就一个字节都不发
+python -X utf8 scripts/t3_otlp_export.py                      # 24 份已入库轨迹 → eval/results/t3-otlp.json
+```
+
+三个形状上的决定，每一个都是"照抄 OTLP 会丢东西"逼出来的：
+
+1. **一个 `span_id` = 一个 OTLP span。** 同一 id 上的多条记录合并进一个 span；同名字段撞车时**不覆盖**，后到的改挂 `mcc.<kind>.<字段>` —— `turn_start.est_tokens` 与 `llm_request.est_tokens` 压缩之后就是不相等，而"差多少"恰恰是要看的东西。
+2. **没有 `span_id` 的记录不许丢。** 5 种 kind 天生不带 id（`backend` / `failure_mode` / `mcp` / `skills` / `todo_update`），它们变 event，落在同一轮的 turn span 上，找不到就退到它前面的 run span。v1 那 4 份轨迹**整批**没有 id，于是给每份一个确定性的 `mcc.unhosted` 承载 span（id = `sha256("orphan:" + trace)[:16]`，同一份文件两次导出同 id）。合起来：1,210 条记录里 **208 条是以 event 的形式落地的**，未记账 **0**。
+3. **协议装不下的东西要留下字据。** `AnyValue` 没有 null 分支 → null 的下场是"属性缺席 + 进 `coverage.unrepresentable_nulls` + 写进 `gaps()` 的中文说明"，不是塞一个空串；没有对象分支 → 嵌套结构变 JSON 字符串（不用 collector 侧已标 deprecated 的 `kvlistValue`）；`int64` 与时间戳是十进制**字符串**。`validate()` 在发送前把这些会整批拒收的错先变成能读懂的中文报错。
+
+**证据的形状**（`eval/results/t3-otlp.json`，24 份已入库轨迹 / 1,210 条记录 / **0 个模型请求、0 token** / 5.5s，其中 3s 是等本机收集端应答）：18 条判据，**17 ✓ + 1 条按未量记账**。四本账全部从 payload **反查**，不读导出器自己的账本 —— 否则它算错什么我就跟着信什么：
+
+| 判什么 | 怎么判 | 实到 |
+|---|---|---|
+| 值不丢 | 逐字段按 `FIELD_MAP` 算出该挂的名字，再核对**编码后的值** | **6,964 个字段值，丢 0、改名 0**；另 213 个 null 三处账本相等（导出器 = 脚本独立计数 = `gaps()` 那条） |
+| 结构不编 | span 数 == 源 `span_id` 数 + 承载数；每条父子边在 trace 里找出处；每个属性名有出处 | 480 = 476 + 4（承载只在 4 份 v1 里，v2 的 20 份为 0）；**436 条声明边全部照搬，改写 0、丢 0**，补挂的 20 条全部落在会话/run 锚点上；8,987 个属性 / 103 个名字，凭空造的 0、裸名 0 |
+| 时间不造 | 按 `start=min(ts, ts-latency)`、`end=max(ts)` 逐 span 重算端点 | **480/480 一致**，208/208 个 event 时刻与它那一条记录的 `ts` 一致；零时长 span **101** 个照实计数；时间来源自述与重算不符 0 |
+| 两条路一个字节 | `mcc trace --otel --out` 的产物 vs 库函数对同一会话的产物 | **24/24 逐字节相同**（907,650 B、gaps 提示 168 行）；`validate()` 问题 0；两次 `translate()` 24/24 确定性；24 份输入跑前跑后 sha256 全同 |
+
+**「只有翻译」的代价是量出来的**：trace 474,114 B → payload **907,626 B（×1.91）**，展开成 KeyValue 数组 + 每属性自述编码的净开销；**313 个 `stringValue` 里装的是 JSON**（占属性 3%）。这一层真正花钱的地方不是写代码，是别把这些当成免费的。
+
+**每条判据的 detector 都先挨过一次假错**：10 种错做进 payload 的深拷贝（真实轨迹一个字节不动），对应判据必须红 —— 吃值、造名、空串冒充 null、漏密钥、改边、错挂锚点、伪造时长、抹记账戳、资源属性与 trace 不符、往收集端探针的 payload 里塞一条绝对路径，**10/10 全红**。红不了的 detector 给出的 ✓ 等于零，这一节是给上面那些 ✓ 定价的。最后那一种做在手写探针 payload 上（前九种做在语料 payload 上），并且只在"清洁侧扫出 0"时才算红 —— 否则它是白给的。同一道"证据不许悄悄变薄"的守卫（§10 第 27 / 30 行那条）在这里是第二处：文件数、记录数、核对字段数、属性数、判据条数任何一样缩水就拒写。
+
+**四个真错是这一节的实际产出**，同一个视野盲区：`_resource()` 与 `mcc.span.record_kinds` 早先只扫 `span.records`，而 v1 的记录全长在 `events` 上。于是① 一份真有一个会话的 v1 轨迹，资源里 `mcc.session.count` 报 **0**；② 没人报过模型时 `gen_ai.request.model` 落成 **`""`**；③ `mcc.trace.schema_version` 缺省兜到当前版本，**四条 v1 轨迹集体自报 "2.0"**（它们从没自报过版本）；④ `mcc.unhosted` 的 `record_kinds` 是空串。①②④ 被"payload 空串数 == trace 里本来就有空串数"那条判据的差额（10 vs 6）逮到，③ 任何按名字核对的判据都看不见 —— 它是字符串形状的谎，是比对同一份 payload 的 v1/v2 两侧时看出来的，所以给它**新加了一条判据**：`the_resource_only_says_what_the_trace_says`（报出的必须 trace 里真有，没报的必须 trace 里真没有；`0 个会话` 是测出来的数要留着，`""` 不是）。四条都由 `tests/test_otel_export.py` 钉住，含一条直接读盘上那份 v1 轨迹的。
+
+**第五处谎在这份证据自己身上**，而且是写完前四处之后回头才看见的：`collector_probe` 记的是 `attempted: false / "没给 --collector，一次都没试"`，而**同一份文件**的判据详情里躺着一句"本机 4318 有人应答但回 502" —— 那句话是早先手动跑过一次 `--collector` 时抄下来的，脚本自己没测。测的与说的各说各话，正是这一格对着别人的证据挑了四遍的那处毛病，所以修法不是把句子改软，是**让默认路径真的去试一次**：`_collector()` 现在默认打 `localhost:4318`，非本机 host 仍然拒绝代发。发出去的不是语料，是 `_PROBE_RECORDS` 那 **4 条手写记录**翻出来的 2,987 B（`leaks: {绝对路径 0, 端点 0}` 由同一把尺子 `_leak_scan` 量，闸门在 POST **之前**：手写的记录里本来就没有路径，探到路径等于导出器在从环境里捞内容 —— 那种 payload 更要留在本机）。实测结论没变（HTTP 502、响应体为空），变的是这句现在是量出来的。**未量仍按未量记**：有人应答但不说 OTLP，既不能记成"我们的 payload 被拒"，也没有可查日志说明是谁回的 502。
+
+**这一节不证明的**：① **真实收集端收下并画出树**未量 —— 本机 4318 有人应答但回 502（空响应体，没有可查日志，实测见 `collector_probe`），没有第三方收集端可试；`validate()` 挡得住协议层**拒收**，挡不住收集端**解释**的差异（INTERNAL kind 被平铺、JSON 字符串按纯文本显示）。② 不证明跨机发送安全：payload 里带着 **59 个绝对本地路径**和 **24 个端点样字符串**（`mcc.session.config` 那一类）。`--endpoint` 指向非本机时 CLI 在 stderr 点名这三样东西**然后照发** —— 那是用户明确要的出口，一条命令不该替他改主意；证据脚本的试发则**拒绝**非本机 host，而且它自己那一发用的是不含仓库内容的手写 payload（一份为了量泄露面而生的脚本不该自己当泄露源）。这两种待遇的差别就是 §10 第 34 行。③ 不证明字段语义被对方按 GenAI 约定理解 —— 名字对齐由 `FIELD_MAP` 与单测钉住。
+
+---
+
 ## 5. 工具清单
 
 模型看到的默认是 9 个工具（7 个住在 `tools/`，`write_todos` 住在 `agent/todo_tool.py`，`load_skill` 住在 `ext/skills.py`，见 §2 的依赖约束）。`load_skill` 只在技能目录非空时装配；接了 MCP 之后每个远端工具再多出几行，见 §4.11。风险级别决定它们在权限模式下的待遇。
@@ -664,7 +702,7 @@ live 那次（`demos/traces/red-tests.live.jsonl`，6 轮 13 次调用）的路�
 ## 8. 测试
 
 ```bash
-python -m pytest -q                # 723 passed
+python -m pytest -q                # 828 passed
 python -m pytest tests/test_loop_with_fake_llm.py -q
 python -m pytest tests/test_eval_runner.py tests/test_eval_cli.py -q   # 评测层（不联网）
 python scripts/b4_label_check.py   # 失败模式标签的人工核对，退出码 0 才算过
@@ -675,10 +713,11 @@ python scripts/b6_backend_ab.py    # B6 两臂 A/B：docker 臂降级时不产�
 python scripts/s14_ext_demo.py     # §3.7 的 20 条前提：对着两个 MCP 对手量桥与技能（§4.11）
 python scripts/probe_verifier_gate.py  # S15-a 的数据闸：D21 那道 20% 在盘上支持吗（§4.12）
 mcc export-rl --batch <目录> --out <文件>  # 跑过的轨迹 → RL 数据 + 12 条自证前提（§4.13，不联网）
+python scripts/t3_otlp_export.py  # §7.3-3：24 份已入库轨迹 → OTLP/JSON + 18 条判据（0 个模型请求，§4.14）
 mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 ```
 
-**用哪个解释器跑不是小事**：得用项目的 `.venv`。全局解释器少装了 dev extra 里的官方 `mcp`，`tests/test_mcp_bridge.py` 那条"对端是 SDK 写的服务"就会**静默跳过**，报出来的是 `722 passed, 1 skipped` 而不是 `723 passed` —— 仍然全绿，绿的格数却少一格。同一类能力依赖在证据脚本那边更要紧，见 §10 表第 30 行。
+**用哪个解释器跑不是小事**：得用项目的 `.venv`。全局解释器少装了 dev extra 里的官方 `mcp`，`tests/test_mcp_bridge.py` 那条"对端是 SDK 写的服务"就会**静默跳过**，报出来的是 `827 passed, 1 skipped` 而不是 `828 passed` —— 仍然全绿，绿的格数却少一格。同一类能力依赖在证据脚本那边更要紧，见 §10 表第 30 行。
 
 | 文件 | 覆盖 |
 |---|---|
@@ -708,11 +747,12 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | `test_b2_evidence_guard.py`（3） | 证据文件自己不许悄悄变薄：已签着 live 臂时不带 `--live` 的重跑**拒绝覆盖**（退出码 2、字节不动），没有 live 臂时 fake 侧照常可重跑，以及**仓库里那份证据确实带着 2 条签好的 live 判据 + 1 条未量**（README/SPEC 那几段话的生产者） |
 | `test_permissions.py`（17） | 三种模式 × 三种风险、路径锁在所有模式下生效、破坏性命令在 AUTO 下仍拒、写 `.env` 需显式放行、会话级授权不能吞掉密钥警告、无确认渠道时失败关闭 |
 | `test_planner.py`（13） | 清单不变量、回填、状态机 |
-| `test_trace_cli.py`（12） | `mcc trace` 渲染：时间线/热点/`--why-failed`、schema 不匹配时点名缺哪些字段、旧 trace 落盘标签与当前规则不一致时打印"规则口径变过" |
+| `test_trace_cli.py`（23） | `mcc trace` 渲染：时间线/热点/`--why-failed`、schema 不匹配时点名缺哪些字段、旧 trace 落盘标签与当前规则不一致时打印"规则口径变过"；`--otel` 那条路另 11 条：树按 trace 声明的样子出来、失败的 tool span 标红、**没有 `span_id` 的记录发成 event 而不是进垃圾桶**、stdout 保持一份可 parse 的 JSON（报表走 stderr）、`--out` 写的是**平台无关字节**（Windows 上不许长出 `\r`，§10 第 32 行）、**校验不过一个字节都不写**、目录不存在退 2、`--endpoint` 出本机前先警告、发送失败退 1、没有 `--endpoint` 时逐条打印 `gaps()`；再加 `python -m miniclaude` **必须把退出码传出去**（起子进程量，§10 第 31 行） |
 | `test_prompts.py`（12） | 环境事实是否被注入（Windows/POSIX/macOS 各钉一批关键词）、工具清单回灌且无名字时仍禁止编造、提示词跨调用字节稳定、`REPO_MAP=0` 时那棵退回的目录树：只画形状不画噪声、广度优先、行数预算花完要留截断提示、空工作区 |
 | `test_trace.py`（10） | 落盘与脱敏、replay 容忍非对象 JSON、summarize 只读已记录的字段 |
 | `test_context.py`（10） | 估算与实测校准、压力分档 |
 | `test_trace_contract.py`（11） | **度量契约**：每个报表键都有生产者、发起数≠执行数、在线与离线分类共用同一份定义、schema 快照、`output_chars` 只能从 `tool_call` 记录加出来（含"省略量为 0 是真算了 0"这条）、"孤儿键"检测器自己能抓到 planted 样例 |
+| `test_otel_export.py`（94） | §7.3-3 翻译层最容易骗人的四类，每类一组：**丢记录**（5 种无 `span_id` 的 kind 变 event 且入账、event 落在**同一轮**的宿主 span 上、跨会话不串宿、v1 整批无 id 也翻得出来、盘上 24 份真实轨迹逐个跑"账加得起来 + `validate()` 0 问题"、时间不许倒流）；**丢字段**（`tests/schema_v2.json` 里 20 个 kind 的每个键都必须在 `FIELD_MAP` 登记过名字 —— 加埋点不登记就是 CI 红）；**编结构**（断掉的父亲不重挂但留下那个 id、null 不塞空串而是缺席 + 计数、`latency` 反推的起点写明 `time_source`、没有 `latency` 的 span 就零长度、合并不了的同名值改挂 kind 前缀两个都留、**`_resource` 只扫 records 会把 v1 报成"0 个会话 + 空模型 + 自报 2.0"，三条各钉一条**）；**编码错**（`int64` 是十进制字符串、时间戳是纳秒、`AnyValue` 只许一个分支、非法 id 走 sha 派生而不是原样发出、`validate()` 每种拒收信号一条中文报错且**空 payload 不算干净 payload**）。另加 `post_otlp()` 四条（非 http 不发、校验不过不发、传输失败变回执不抛异常、被拒时保留响应体）与这个 Stage 存在理由本身：**埋点不许 import OTel SDK**（`sys.modules` 与 `src/` 全文两处查） |
 | `test_mcp_bridge.py`（44） | §3.7 的三条硬要求逐条钉：远端广告 `read_file` 也覆盖不了本地那个（前缀隔离 + 本地仍读出真磁盘内容）、远端自报 `read`/`destructive` 一律采纳 `execute` 而声明值只做展示、参数校验在**出网之前**（`text=12` 拒、连接还能用）、`MCP_SERVERS` 形状与语义各一个产地、子进程 env 白名单（`LLM_API_KEY` 不透传、点名才给）、握手参数里的密钥不进 trace、服务崩/沉默/吐垃圾各自的原因带 stderr 且 `close()` 后不留子进程、没有 `properties` 的 schema 整条不装配、**官方 SDK `FastMCP` 服务与自写敌意服务两条发现路径共用同一份断言**（中文往返、`TextContent` dataclass 而不是 dict） |
 | `test_skills.py`（21） | 目录与正文分家：5,200 字符正文渲出 3 行目录（**长度与正文无关**这条由测试自己造两个技能量出来，不是看着像）、超预算时宁少列一个技能也不丢掉成本提示、技能名进不了安全字符集就不装（`load_skill` 按名字取，参数里没有路径就没有越界）、同目录别的文件只报名字不读不执行（D20）、frontmatter 手写解析不引 YAML（未闭合的头整篇当正文） |
 | `test_cli_ext.py`（20） | 装配只有一条路径：`build_session` 里 MCP/技能都从 `extra_tools` 进、READONLY 下桥根本不建（`skip_reason` 非空且外部工具为 `[]`）、AUTO 对 `mcp__` 是 ask 而对本地写是 allow、**被拒的远端调用在盘上不留副作用**（写到工作区之外的那个文件不存在、trace 里只有 `permission/deny` 没有 `tool_call`）、授权臂作为对照真落一行、`mcp`/`skills` 两条事件的字段集合与 schema 契约对齐 |
@@ -736,6 +776,7 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 - **`DockerBackend` 的真实容器路径一次也没跑过。** 这台机器上没有 docker，B6 是用一个**会真的在宿主上执行命令**的假 `docker` 替身跑出来的：被证明的是命令行构造、降级不静默、两臂判定一致（12/12）与 rev 共用，**没被证明的是文件隔离、网络隔离、镜像内容**（`eval/results/b6-backend-ab.json` 里 `container_isolation_tested: false`）。所以"这个 agent 能在沙箱里跑"目前是**接口层的事实**，不是运行时的事实；真 docker 到位后原样重跑 `scripts/b6_backend_ab.py` 才算补上。附带一条：`docker run --rm` 每条命令付一次容器启动，本项目里命令只占墙钟 6~10%，延迟付得起，但这笔交换在评测语义上值不值，替身答不了。
 - **MCP 只测了 stdio，两个对手都是自己的进程。** §4.11 那 20 条前提证明的是命名空间隔离、风险不自报、出门前校验、env 白名单、降级不静默与被拒无副作用 —— 对手一个是自写的敌意 fixture、一个是用官方 `FastMCP` 写的正常服务，**没有连过任何一个真第三方服务**（连不上是网络策略，不是机制缺口，但结论因此只到"我们的客户端按协议办事"这一层）。HTTP/SSE 传输按 SPEC §7.4 顺位 2 砍进 Tier 3；技能自带的脚本明确不读不执行（D20），所以"技能=提示词包"是能力上限而不是待办。另外"模型会不会**主动**去 `load_skill`"没测：fake 引擎里那次取用是剧本写好的，真实分布要看 live。
 - **导出的 RL 数据里 69.6% 的行没有 state 正文。** 不是导出器偷懒：§6.4 的 trace 按设计只存计数与类型名，观测正文只在 §4.10 的会话快照里，而快照是 S13 才上线的 —— 206 个输入 run 里 144 个（对应 720/1,034 行）结构性地只能拿到指纹（`reconstructible: false` 逐行自述原因）。所以要拿这个 agent 做后训练，第一步不是训，是让 trace 落 observation，那是 §3.1 没覆盖的一次改动（正文进盘的体积上限 + "仓库内容进不进日志"的边界重开），本项目没做（D23 不变）。附带三条同源的边界：SBS 人工标注 **0 条**（54 对成对偏好全部是同题重跑自动配的，判据来自 manifest 而不是人）；修 `append_manifest` 之前那批数据的**中间态不可复原** —— 重跑覆盖同名 trace，所以同一道题只留得到最后一次，修之后 13 个批次 206 个 run **一条都没被丢弃**（`dropped_runs.count = 0`），而输入 run 从 195 折到 158 那 37 行差额就是"覆盖掉中间态"这件事在盘上留下的全部痕迹；以及 832 行历史数据带着 `unverified`（§7.3-7 的指纹上线之前导的，每一行自述没被校验过 —— 新闸门在历史数据上一个 run 都没挡掉，但也没有一个 run 被它背书）。
+- **OTLP 那一头没人接过。** §4.14 的 18 条判据里 17 条绿，唯一未量的一条是"真实收集端收下并画出树"：脚本默认往 `localhost:4318/v1/traces` POST 一次（发的是**手写 4 条记录**翻出的 2,987 B，不带仓库内容），实测回 `HTTP 502` 且响应体为空 —— 有人应答但不说 OTLP，所以这条既不能记成"被拒"也不能记成"收下"（`eval/results/t3-otlp.json` 的 `collector_probe`）。已被证明的是形状、值、边、时间、确定性、CLI 与库同字节这几件事；**Jaeger 里画出来长什么样没看过**。附带一条边界：payload 里带着 **59 个绝对本地路径**和 **24 个端点样字符串**，`mcc trace --otel --endpoint` 指向非本机时只**警告后照发**（那是用户明确要的出口），证据脚本自己则拒绝代发 —— 两种待遇的差别记在 §10 第 34 行，跨机发送前要先过 SPEC §3.1 那条"仓库内容进不进日志"的边界。
 - **框架对照是文档，不是移植层。** `docs/framework-equivalence.md` 说明了我们与 LangGraph 的概念对应关系和缺的东西（`Send` 动态分发、`get_state_history` 的任意回溯），但**没有**实现它的接口 —— 迁移表里三处硬冲突（权限默认值、幂等台账、度量产地）是"真要换需要先解的结"，不是"已经兼容"。
 - **live 数字不可复现。** 同一任务重跑轮数会漂移；证据文件因此各自记录自己那一次，不做"平均"。
 - **端点行为依赖。** `tools` 字段偶发被吞，所以工具清单在系统提示里又列了一遍。
@@ -782,7 +823,12 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | 27 | 生成证据的脚本会**把签过字的证据自己削薄**，而且削完看不出痕迹 | `b2_compact_ab.py` 不带 `--live` 也重写同一份 JSON，而 live 那 3 条只有真端点跑得出来；一次"只想看看 fake 侧"的重跑就把 15 条判据变 12 条，`pass: true` 与 `schema: 1` 都还在原处 | 写盘**之前**拒绝，而不是写完之后靠人数列数 | `unsign_live_guard()` → 退出码 2 且字节不动；`tests/test_b2_evidence_guard.py` 三条从两头钉（不许削薄 / 没签过时 fake 侧仍可重跑 / 已入库那份确实带着 2 签 + 1 未量），SPEC §3.3.4 末段记原委 |
 | 28 | SPEC §3.6 让"绝不重放"读 `done_call_ids`，而那份账本**本进程也在写** | `dedupe_tool_use_ids` 改过名（`call_0` → `call_0~0`）之后，L2 摘要把带旧名的消息整组删掉，第 13 轮就重新发出一个干净的 `call_0` —— 判据读账本就把它认成"上一个进程做过"，一次全新写入被跳过。B2 的 on 臂 19 轮里跳 6 次、八份汇总只写出四份，判 fail 而 trace 一切正常 | 两个角色分开：账记进 `done_call_ids`（进快照），免重放的判据读一份**只在 restore 时种下**的副本 | `loop.py` 加 `_restored_call_ids`，SPEC §3.6.1 补这一段（那份坏现场已被重跑覆盖，可复现形式 = `test_the_ledger_of_this_process_is_not_a_replay_guard`） |
 | 29 | "这行判据配这份轨迹"这件事从来没有被校验过，只被**代理**过（路径 + 轮数） | trace 文件名不含内容哈希：重跑覆盖、手工编辑都不改路径，而"轮数一样的另一份轨迹"配出来的 reward 看起来完全合理。SPEC §7.3-7 自己写了触发条件"再抓一次就做"，而它到 S15-b 为止已经响过两次（`duplicate-trace` 14 + `steps_from()` 的幽灵步） | 指纹必须在判据的**唯一出口**盖（两处各算就会漂），验证必须在 join **之前**；"文件不在"和"指纹不符"是两件事 —— 相对路径负责把文件找回，sha 负责判定同一性 | 已做完（§7.3-7）。两处偏离规格且都往严格方向：末行哈希→**全文件哈希**（末行查不出中间行被改，而数行数本来就要读一遍文件，边际成本 0）；`mcc eval --baseline` 那半边**按"规格前提不成立"记录没做**（基线刻意不存 trace 路径，加校验等于塞给它一个它故意没有的依赖）。13 个批次实测 `trace-drift` **0 行** —— 它是哨兵不是筛子，这次的收益是"以后改了会响" |
-| 30 | 第 27 行那条"证据会被自己削薄"的缺陷**只修了一个脚本**：还有三个把证据写进 `eval/results/` 的脚本没有守卫，其中 `scripts/s14_ext_demo.py` 有一条已知的降级路径 | 它的 SDK 臂取决于当前解释器装没装官方 `mcp`（`HAS_SDK = find_spec("mcp")`），没装就把 `out["sdk"]` 写成 `{ok: false}` 然后**照旧覆盖**那份签着 20/20 的入库证据。本项目跑批用 `.venv`（里面 `mcp 2.2.0` 在），而 miniforge 那个全局解释器不在 —— 也就是"换错 python 就削证据"这条路是通的，本次盘点 `pip show mcp` 已复现 | 把 `unsign_live_guard()` 的思路抽成共用守卫：**写盘之前**比较新旧两份，凡新份少写了旧份里 `ok: true` 的判据就拒绝 | 未修，先记在案（这一行就是它的复现步骤）。同类风险另有 `b3_repomap_ab.py` / `b6_backend_ab.py` 两处无条件覆盖，它们没有已知的能力降级路径，所以排在 s14 之后 |
+| 30 | 第 27 行那条"证据会被自己削薄"的缺陷**只修了一个脚本**：还有三个把证据写进 `eval/results/` 的脚本没有守卫，其中 `scripts/s14_ext_demo.py` 有一条已知的降级路径 | 它的 SDK 臂取决于当前解释器装没装官方 `mcp`（`HAS_SDK = find_spec("mcp")`），没装就把 `out["sdk"]` 写成 `{ok: false}` 然后**照旧覆盖**那份签着 20/20 的入库证据。本项目跑批用 `.venv`（里面 `mcp 2.2.0` 在），而 miniforge 那个全局解释器不在 —— 也就是"换错 python 就削证据"这条路是通的，本次盘点 `pip show mcp` 已复现 | 把 `unsign_live_guard()` 的思路抽成共用守卫：**写盘之前**比较新旧两份，凡新份少写了旧份里 `ok: true` 的判据就拒绝 | 未修，先记在案（这一行就是它的复现步骤）。同类风险另有 `b3_repomap_ab.py` / `b6_backend_ab.py` 两处无条件覆盖，它们没有已知的能力降级路径，所以排在 s14 之后。**§7.3-3 已经按同一思路加了第二处守卫**（`t3_otlp_export.py::_thinning_guard`，比文件数/记录数/核对字段数/属性数/判据条数，任一缩水拒写），但那是复制不是抽取 —— 前三处仍然裸奔 |
+| 31 | `python -m miniclaude` **永远退 0**，`mcc` 却会正确退 1 | `__main__.py` 写的是 `main()` 而不是 `sys.exit(main())`；console script 由 setuptools 自己包了一层 `sys.exit`，所以三个入口里恰好只有 `-m` 那条是坏的。README §4 说三个入口等价 —— 而给 `--otel` 写退出码测试时才撞上它：一份收集端会整批拒收的 payload，CI 读成"成功" | 入口必须转发退出码 | `sys.exit(main())`；`test_python_m_entry_propagates_the_exit_code` 起**子进程**量（退出码是解释器给的，在测试进程里调 `main()` 量不到），一条失败路径退 1、一条成功路径退 0 |
+| 32 | `mcc trace --otel --out` 在 Windows 上写出的字节 ≠ 库函数产出的字节，同一份 JSON 得到两个 sha | 落盘用了 `write_text`：文本模式在 Windows 把 `\n` 换成 `\r\n`。§7.3-7 刚把"证据文件要按字节指纹"讲完，导出器自己就先在这一点上分裂 | 导出物一律**写字节**：`write_bytes(blob)`，平台不碰内容 | `trace_cmd._export_otlp` 改 `write_bytes`；`cli_and_library_agree` 判据把这件事从"看起来一样"变成 24/24 份逐字节相等（含换行、无 `\r`） |
+| 33 | 导出器**替轨迹撒了四个谎**，全部来自同一处视野盲区：`_resource()` 与 `mcc.span.record_kinds` 只扫 `span.records`，而 v1 轨迹的记录全长在 `events` 上 | 于是 v1 的 `mcc.session.count` 报 0（trace 里真有 1 个会话）、`gen_ai.request.model` 落成 `""`（拿值冒充"没有值"，和 null 塞空串同罪）、`mcc.trace.schema_version` 缺省兜到当前版本 → 四条从没自报过版本的 v1 轨迹集体自报 "2.0"、`mcc.unhosted` 的 `record_kinds` 是空串。前三条里最阴的是版本：它字符串形状正常、任何按名字/值核对的判据都看不见 | 资源属性也走"宁可不填也不猜"：**空串一律改成缺席**，测出来的 `0` 保留（0 是数，不是缺失）；聚合函数必须看得见 records **和** events | 四条全修 + `tests/test_otel_export.py` 三条钉住（其中一条直接读盘上那份 v1 轨迹）；证据端新增判据 `the_resource_only_says_what_the_trace_says` 与探针 `starve_resource` —— 前者把"报出的必须 trace 里真有、没报的必须 trace 里真没有"变成会红的断言，后者证明它红得了 |
+| 34 | "有没有真实收集端"这件事本机量不了，而脚本差点把它写成失败或写成成功 | 4318 端口**有人应答**但回 `502` 且响应体为空（不是拒连、不是超时），照 HTTP 语义它是"上游坏了"：既不能证明 payload 被收下，也没有日志可查是谁拒的。另一半是 `--endpoint` 该不该挡非本机：它是用户明确要的出口，脚本替他改主意会把一个正当用法变成"这条命令做不到" | 判据支持第三态 `ok: null`（终端标 `?`、`pass` 跳过它）；两个调用点按各自的角色分开处理 | `a_real_collector_accepts_the_payload` 按**未量**记账（18 条判据里 17 ✓ + 1 未量）；证据脚本的 `_collector()` **拒绝**非本机 host（一份为了量泄露面而生的脚本不该自己当泄露源），CLI 的 `--endpoint` 在非本机时**警告后照发**，警告里直接点名 `project_root` / `trace_path` / 端点地址这三样东西会跟着出去 |
+| 35 | 上一行那句"4318 回 502"当时是**背下来的**，不是测出来的：同一份证据文件里 `collector_probe.attempted` 是 `false`、detail 写着"没给 `--collector`，一次都没试" | 那句话来自早先手动加旗标跑的一次运行，被抄成判据详情的默认文案 —— 于是文件左页说不试、右页说试过。这类不自洽在按名字核对值时看不见，因为它是**两句人话之间的矛盾**，不是两个字段之间的矛盾 | 默认路径就试一次本机端口（非本机仍拒绝代发），判据详情由 receipt 生成而不是写死；探针不许拿语料当靶子 | `_collector()` 默认打 `http://localhost:4318/v1/traces`，`collector_probe` 现在带 `attempted: true` 与真实 receipt（HTTP 502、空响应体、`leaks: 绝对路径 0 / 端点 0`）；那句话改由 `_receipt_detail()` 现算；第 10 个探针往探针 payload 里塞一条绝对路径，同时验证闸门会拦与清洁侧确实是 0（见 §4.14 末） |
 
 ---
 
@@ -803,7 +849,7 @@ mini-claude-code/
 │   ├── agent/                  loop / planner / prompts / permissions
 │   │                           / context / state / todo_tool
 │   ├── cli/                    build_session、REPL、渲染（rich 可选）
-│   │                           / trace_cmd（`mcc trace` 三个视图）
+│   │                           / trace_cmd（`mcc trace` 三个视图 + `--otel` 导出）
 │   │                           / eval_cmd（`mcc eval` 批跑入口，退出码=结论）
 │   ├── memory/                 工作记忆与仓库地图（S11 · 目录名由 MEMORY_DIR 定）
 │   │   ├── store.py            `memory.json`：四类记忆、指纹、原子写、坏文件退化成没缓存
@@ -820,6 +866,7 @@ mini-claude-code/
 │   │   └── skills.py           SkillLoader（目录/正文分家）+ `load_skill`，frontmatter 手写解析不引 YAML
 │   ├── infra/
 │   │   ├── trace.py            JSONL 轨迹、replay、summarize、fingerprint（内容指纹）、密钥脱敏
+│   │   ├── otel.py             trace → OTLP/JSON 的导出映射（§7.3-3）：只翻译，不引入 OTel SDK
 │   │   └── failure.py          失败模式分类学（8 条规则，在线/离线共用）
 │   └── eval/                   评测层（S9）
 │       ├── taskset.py          题集加载与内容哈希，未知字段一律拒绝
@@ -838,13 +885,13 @@ mini-claude-code/
 │   ├── baselines/              `fake-<题集哈希>.json` —— B1 的基线，进版本库
 │   ├── results/                验收线的证据文件（b2/b3 的 A/B 判据、live 冒烟报表、B2 高预算探针的两趟轨迹副本；数字不可复现所以入库）
 │   └── .work/                  工作副本与逐条记录（忽略，报表与基线才提交）
-├── scripts/                    probe_caps / probe_window / probe_parallel_share / probe_verifier_gate / b4_label_check / b2_compact_ab / b3_repomap_ab / b6_backend_ab / s14_ext_demo 等证据生成器
+├── scripts/                    probe_caps / probe_window / probe_parallel_share / probe_verifier_gate / b4_label_check / b2_compact_ab / b3_repomap_ab / b6_backend_ab / s14_ext_demo / t3_otlp_export 等证据生成器
 ├── docs/
 │   └── framework-equivalence.md  LangGraph ↔ 本项目的概念对照 + 为什么不用它（D26，≤200 行）
 ├── skills/                     技能目录（一个目录一个 SKILL.md，正文按需展开）
 │   ├── add-eval-task/          给 eval/ 加一道新题时怎么写判据
 │   └── trace-triage/           从 `mcc trace --why-failed` 的标签走到处方
-├── tests/                      723 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照；fixtures/ 里两个 MCP 服务：自写的敌意版 + 官方 SDK 版）
+├── tests/                      828 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照；fixtures/ 里两个 MCP 服务：自写的敌意版 + 官方 SDK 版）
 └── demos/
     ├── run_demo.py             隔离副本 → 跑真 Agent → 独立判据 → 生成证据（证据落点可注入 `artifact_root`：跑测试不覆盖已入库那一份）
     ├── fake_scripts.py         FakeLLM 轨迹（脚本化，不报自述数字）

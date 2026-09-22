@@ -1,0 +1,3172 @@
+{
+  "clauses": [
+    {
+      "claim": "24/24 份已入库轨迹都翻得成 OTLP/JSON，且收集端协议层校验 0 问题",
+      "detail": "1,210 条记录 / 24 个会话 → 480 个 span · 校验问题合计 0 条",
+      "id": "every_committed_trace_exports",
+      "ok": true
+    },
+    {
+      "claim": "一条记录都不丢（折叠数 + event 数 = 输入数，从 payload 反查而不是读导出器自己的账本）",
+      "detail": "输入 1,210 · 落进 span 或 event 1,210 · 未记账 0（其中 208 条是以 event 的形式落地的）",
+      "id": "no_record_is_lost",
+      "ok": true
+    },
+    {
+      "claim": "一个字段值都不丢（逐字段按 FIELD_MAP 算出该挂的名字，再核对编码后的值）",
+      "detail": "核对 6,964 个字段值 · 丢 0 · 让位改名 0  · 另有 213 个 null 不在此列（协议没有 null 分支，见 nulls_have_no_home_and_say_so）",
+      "id": "no_field_value_is_lost",
+      "ok": true
+    },
+    {
+      "claim": "属性名全部有出处：不是 FIELD_MAP 登记的、就是默认命名/账目属性，且没有裸名",
+      "detail": "8,987 个属性 · 凭空造的 无 · 裸名 无 · 靠默认命名的字段 ['run_end.redundant_calls']，其中只出现在 v1 轨迹里的 ['run_end.redundant_calls'] —— 两者相等才算'没有 v2 字段漏登记'（名字猜法误报过一次：`mcc.repo_map.omission_reasons` 其实是 `reasons` 的登记目标名）",
+      "id": "no_field_name_is_invented",
+      "ok": true
+    },
+    {
+      "claim": "资源属性逐条回对：报出的会话数/模型/版本就是 trace 里的那个集合，没报的一定是 trace 里真没有的（空串不等于缺席）—— 盯的是导出器唯一一处自己开口的地方",
+      "detail": "24 份 · 资源属性在场情况 {'gen_ai.request.model': 24, 'mcc.session.count': 24, 'mcc.trace.schema_version': 20, 'service.name': 24} · 与 trace 不符 0 处 · 空串值 0 处。`mcc.trace.schema_version` 只写在自报过版本的 20 份上，剩下 4 份 v1 轨迹宁可缺席（早先这里兜到当前版本，等于替 v1 撒了个 '2.0'）",
+      "id": "the_resource_only_says_what_the_trace_says",
+      "ok": true
+    },
+    {
+      "claim": "span 数 == 源 span_id 数 + 承载 span 数，且承载 span 只出现在没有 span_id 的旧轨迹里",
+      "detail": "span 480 = 源 span_id 476 + 承载 4（承载只出现在 4 份旧轨迹里，v2 的 20 份都是 0）",
+      "id": "no_span_is_invented",
+      "ok": true
+    },
+    {
+      "claim": "每条父子边都在 trace 里找到出处：声明过的没被改写，凭空多出来的只落在会话/run 锚点上",
+      "detail": "trace 声明 436 条边 → 照搬 436 · 改写 0 · 父亲缺席所以不挂 0（等于 `mcc.span.detached_parent_id` 的 0 处）· 补挂 20，其中落在会话/run 锚点上的 20（差额就是编出来的边）",
+      "id": "edges_follow_the_trace",
+      "ok": true
+    },
+    {
+      "claim": "没有 span_id 的旧轨迹翻得出来，但只有一层，且不编父子关系",
+      "detail": "4/24 份是这种形状。例：demos/traces/v1-baseline/bug-hunt.live.jsonl 的 37 条记录 → 1 个 `mcc.unhosted` span、1 个根、0 条 parentSpanId、37 个 event",
+      "id": "v1_traces_collapse_honestly",
+      "ok": true
+    },
+    {
+      "claim": "同一份输入两次 translate() 字节相同（不依赖 dict 序、不掺时钟）",
+      "detail": "24/24 份重算一致",
+      "id": "the_export_is_deterministic",
+      "ok": true
+    },
+    {
+      "claim": "`mcc trace --otel --out` 写出的字节 == 库函数对同一会话产出的字节（含换行、无 \\r）",
+      "detail": "24/24 份逐字节相同 · CLI 侧合计 907,650 B · gaps 行数合计 168",
+      "id": "cli_and_library_agree",
+      "ok": true
+    },
+    {
+      "claim": "密钥串不出导出器（按形状判，不去读那把真钥匙）",
+      "detail": "trace 原文里未遮的 secret 形状 0 处 —— 落盘时 `trace._scrub` 已把它们遮成 4 字前缀 + ***；payload 里再扫到 0 处（这些前缀不是密钥，`_mask` 是幂等的）。`validate()` 在发送前还会整份再扫一遍",
+      "id": "secrets_stay_out",
+      "ok": true
+    },
+    {
+      "claim": "null 字段既不伪装成空串也不留进 payload，而是缺席 + 计数 + 写进 gaps",
+      "detail": "213 个 null 字段：payload 里 null 值 0 个。空串属性 6 个，和 trace 里本来就是空串的 6 个一比一 —— 多出来的空串才是'拿空串冒充 null'（第一版把这两件事混了，被 14 个正经空 note 冤枉红）。导出器账本 213 vs 本脚本独立计数 213；gaps 里那条 null 说明在",
+      "id": "nulls_have_no_home_and_say_so",
+      "ok": true
+    },
+    {
+      "claim": "每个 span 的起止都真的由这批记录的 ts/latency 算出来，event 时刻等于它那条记录的 ts",
+      "detail": "480 个 span 逐个重算端点：对得上 480 · 对不上 0 · event 时刻 208 对 / 0 错 · 零时长 span 101 个（一个时间戳的 run 就是零长度，计数而不伪造区间）",
+      "id": "intervals_come_from_the_timestamps",
+      "ok": true
+    },
+    {
+      "claim": "每个 span 都自述 `mcc.span.time_source`，且自述的和重算的一致",
+      "detail": "时间来源分布 {'record-timestamps': 179, 'latency-reconstructed': 301} · 没自述的 0 个 · 自述与重算不符 0 个",
+      "id": "every_span_declares_where_its_time_came_from",
+      "ok": true
+    },
+    {
+      "claim": "嵌套结构落为 JSON 字符串属性 —— 这是 gaps 里写明的翻译代价，量一下有多大",
+      "detail": "313 个 stringValue 里装的是 JSON（占 8,987 个属性的 3%）。选 JSON 字符串而不是 `kvlistValue`：后者在 collector 侧已标 deprecated，且 `gen_ai.tool.call.arguments` 在语义约定里本来就规定是 JSON 字符串",
+      "id": "nested_structures_become_json_strings",
+      "ok": true
+    },
+    {
+      "claim": "这份证据不改动它的输入（跑一次不写坏 24 份已入库轨迹）",
+      "detail": "24 份轨迹跑前跑后 sha256 全同（变了 0 份）· payload 里 59 个绝对本地路径、24 个端点样字符串 —— 数值本身是泄露面，见 what_this_does_not_prove",
+      "id": "the_corpus_is_read_only",
+      "ok": true
+    },
+    {
+      "claim": "上面每条判据的 detector 都不是摆设：把那种错塞进去一次，它就得红一次",
+      "detail": "10/10 个探针红 · 没红的：无 · 靶子：eval\\results\\b2-live-budget-probe.traces\\sample02\\gf-calculator.r0.live.jsonl（十种错做在 payload 的深拷贝上，真实轨迹不动一个字节）",
+      "id": "detectors_fire_on_planted_errors",
+      "ok": true
+    },
+    {
+      "claim": "真实收集端收下并能画出树 —— 未量（除非本机 4318 真有人回 2xx）",
+      "detail": "http://localhost:4318/v1/traces 回了 HTTP 502（响应体是空的）。按**未量**记账而不是判 ✗：不是 OTLP 的服务和没人应答的端口，都不构成'我们的 payload 被拒'的证据",
+      "id": "a_real_collector_accepts_the_payload",
+      "ok": null
+    }
+  ],
+  "cli_vs_library": {
+    "demos/traces/b4-live/bug-hunt.live.jsonl": {
+      "cli_bytes": 26427,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 26427,
+      "session": "ec09394ccd2a"
+    },
+    "demos/traces/b4-live/codegen.live.jsonl": {
+      "cli_bytes": 22221,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 22221,
+      "session": "9ff764da1eec"
+    },
+    "demos/traces/b4-live/red-tests.live.jsonl": {
+      "cli_bytes": 26035,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 26035,
+      "session": "24a4d88d5398"
+    },
+    "demos/traces/bug-hunt.fake.jsonl": {
+      "cli_bytes": 41673,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 41673,
+      "session": "34f9403ae3eb"
+    },
+    "demos/traces/bug-hunt.live.jsonl": {
+      "cli_bytes": 50445,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 50445,
+      "session": "556a02badb7d"
+    },
+    "demos/traces/codegen.fake.jsonl": {
+      "cli_bytes": 50293,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 50293,
+      "session": "ca15896eab3e"
+    },
+    "demos/traces/codegen.live.jsonl": {
+      "cli_bytes": 48508,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 48508,
+      "session": "d8b6a84ea74d"
+    },
+    "demos/traces/giveup.fake.jsonl": {
+      "cli_bytes": 35369,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 35369,
+      "session": "11f15a410979"
+    },
+    "demos/traces/readonly-qa.fake.jsonl": {
+      "cli_bytes": 18464,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 18464,
+      "session": "046945e6cedc"
+    },
+    "demos/traces/readonly-qa.live.jsonl": {
+      "cli_bytes": 19192,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 19192,
+      "session": "9d556bd59b55"
+    },
+    "demos/traces/red-tests.fake.jsonl": {
+      "cli_bytes": 48251,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 48251,
+      "session": "31c7da454cca"
+    },
+    "demos/traces/red-tests.live.jsonl": {
+      "cli_bytes": 35561,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 35561,
+      "session": "03eac979f103"
+    },
+    "demos/traces/v1-baseline/bug-hunt.live.jsonl": {
+      "cli_bytes": 18718,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 18718,
+      "session": "ccc3e7375c82"
+    },
+    "demos/traces/v1-baseline/codegen.live.jsonl": {
+      "cli_bytes": 36426,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 36426,
+      "session": "6bee37b621ea"
+    },
+    "demos/traces/v1-baseline/readonly-qa.live.jsonl": {
+      "cli_bytes": 13761,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 13761,
+      "session": "2785d18028ae"
+    },
+    "demos/traces/v1-baseline/red-tests.live.jsonl": {
+      "cli_bytes": 17859,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 17859,
+      "session": "ffafdacfc8a3"
+    },
+    "eval/results/b2-live-budget-probe.traces/sample01/gf-calculator.r0.live.jsonl": {
+      "cli_bytes": 72441,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 72441,
+      "session": "d99d75f46d43"
+    },
+    "eval/results/b2-live-budget-probe.traces/sample02/gf-calculator.r0.live.jsonl": {
+      "cli_bytes": 135986,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 135986,
+      "session": "7013f598ad81"
+    },
+    "eval/results/live-smoke.traces/bh-format-duration.r0.live.jsonl": {
+      "cli_bytes": 34353,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 34353,
+      "session": "f688adf4b6b6"
+    },
+    "eval/results/live-smoke.traces/bh-readonly-explain.r0.live.jsonl": {
+      "cli_bytes": 19322,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 19322,
+      "session": "3d0286311659"
+    },
+    "eval/results/live-smoke.traces/csv-add-export.r0.live.jsonl": {
+      "cli_bytes": 19747,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 19747,
+      "session": "e292b9e2144f"
+    },
+    "eval/results/live-smoke.traces/csv-implement-describe.r0.live.jsonl": {
+      "cli_bytes": 31354,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 31354,
+      "session": "121ebd819cbb"
+    },
+    "eval/results/live-smoke.traces/csv-qa-scope.r0.live.jsonl": {
+      "cli_bytes": 17265,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 17265,
+      "session": "11e77fd95278"
+    },
+    "eval/results/live-smoke.traces/gf-calculator.r0.live.jsonl": {
+      "cli_bytes": 67979,
+      "exit_code": 0,
+      "gaps_printed": 7,
+      "identical": true,
+      "library_bytes": 67979,
+      "session": "993183f438bb"
+    }
+  },
+  "collector_probe": {
+    "attempted": true,
+    "detail": "http://localhost:4318/v1/traces 回了 HTTP 502（响应体是空的）。按**未量**记账而不是判 ✗：不是 OTLP 的服务和没人应答的端口，都不构成'我们的 payload 被拒'的证据",
+    "endpoint": "http://localhost:4318/v1/traces",
+    "leaks": {
+      "absolute_local_paths": 0,
+      "endpoint_like_strings": 0
+    },
+    "ok": null,
+    "payload_bytes": 2987,
+    "payload_records": 4,
+    "payload_scope": "手写的 4 条记录：0 个仓库路径、0 个端点地址、0 个真实 session id",
+    "receipt": {
+      "bytes": 2987,
+      "endpoint": "http://localhost:4318/v1/traces",
+      "error": "HTTP 502，响应体是空的",
+      "ok": false,
+      "status_code": 502
+    }
+  },
+  "corpus": [
+    "demos/traces/b4-live/bug-hunt.live.jsonl",
+    "demos/traces/b4-live/codegen.live.jsonl",
+    "demos/traces/b4-live/red-tests.live.jsonl",
+    "demos/traces/bug-hunt.fake.jsonl",
+    "demos/traces/bug-hunt.live.jsonl",
+    "demos/traces/codegen.fake.jsonl",
+    "demos/traces/codegen.live.jsonl",
+    "demos/traces/giveup.fake.jsonl",
+    "demos/traces/readonly-qa.fake.jsonl",
+    "demos/traces/readonly-qa.live.jsonl",
+    "demos/traces/red-tests.fake.jsonl",
+    "demos/traces/red-tests.live.jsonl",
+    "demos/traces/v1-baseline/bug-hunt.live.jsonl",
+    "demos/traces/v1-baseline/codegen.live.jsonl",
+    "demos/traces/v1-baseline/readonly-qa.live.jsonl",
+    "demos/traces/v1-baseline/red-tests.live.jsonl",
+    "eval/results/b2-live-budget-probe.traces/sample01/gf-calculator.r0.live.jsonl",
+    "eval/results/b2-live-budget-probe.traces/sample02/gf-calculator.r0.live.jsonl",
+    "eval/results/live-smoke.traces/bh-format-duration.r0.live.jsonl",
+    "eval/results/live-smoke.traces/bh-readonly-explain.r0.live.jsonl",
+    "eval/results/live-smoke.traces/csv-add-export.r0.live.jsonl",
+    "eval/results/live-smoke.traces/csv-implement-describe.r0.live.jsonl",
+    "eval/results/live-smoke.traces/csv-qa-scope.r0.live.jsonl",
+    "eval/results/live-smoke.traces/gf-calculator.r0.live.jsonl"
+  ],
+  "detector_probes": [
+    {
+      "detected": {
+        "session_start.model": 1
+      },
+      "fired": true,
+      "probe": "字段值被吃掉"
+    },
+    {
+      "detected": [
+        "invented.by.probe"
+      ],
+      "fired": true,
+      "probe": "属性名是编的"
+    },
+    {
+      "detected": true,
+      "fired": true,
+      "probe": "null 被空串冒充"
+    },
+    {
+      "detected": 1,
+      "fired": true,
+      "probe": "密钥漏进 payload"
+    },
+    {
+      "detected": 1,
+      "fired": true,
+      "probe": "父子边被改写"
+    },
+    {
+      "detected": 1,
+      "fired": true,
+      "probe": "补挂的边挪到了规则之外"
+    },
+    {
+      "detected": 1,
+      "fired": true,
+      "probe": "时长是伪造的"
+    },
+    {
+      "detected": 1,
+      "fired": true,
+      "probe": "记录的记账戳没了"
+    },
+    {
+      "detected": [
+        "mcc.session.count=0 vs trace 里 1 个会话"
+      ],
+      "fired": true,
+      "probe": "资源里的会话数与 trace 不符"
+    },
+    {
+      "detected": {
+        "clean": {
+          "absolute_local_paths": [],
+          "endpoint_like_strings": []
+        },
+        "planted": [
+          "D:/repo/calculator/core.py"
+        ]
+      },
+      "fired": true,
+      "probe": "收集端探针的 payload 里带仓库形状"
+    }
+  ],
+  "engine": "无引擎：24 份已入库轨迹，0 个模型请求",
+  "gaps": [
+    {
+      "handling": "`verdict: null` 这类字段整个不导出，数量记在 `coverage.unrepresentable_nulls`，消费方看到的是属性缺失，而不是一个假的空串。",
+      "item": "null 值",
+      "lost": "OTLP 的 `AnyValue` 没有 null 分支（只有 string/bool/int64/double/array/kvlist/bytes）。"
+    },
+    {
+      "handling": "落为 JSON 字符串属性。这不是偷懒：`gen_ai.tool.call.arguments` 在语义约定里本来就规定是 JSON 字符串，而 `kvlistValue` 在 collector 侧已标 deprecated。",
+      "item": "嵌套结构",
+      "lost": "`config` / `args` / `todos` / `skills` / `servers` 这类映射，以及混了 null 的列表。"
+    },
+    {
+      "handling": "`latency` 存在时反推起点（`ts - latency`），span 打 `mcc.span.time_source` = `latency-reconstructed`；不存在时 start==end，是个零长度 span，计数在 `coverage.zero_duration_spans`。",
+      "item": "时间区间",
+      "lost": "trace 每条记录只有一个 `ts`（写下那一刻），没有开始/结束两个端点。"
+    },
+    {
+      "handling": "合成一个 span（`chat {model}`），不凭空造父子关系 —— 要分开就得先改 §3.1 的埋点。",
+      "item": "span 层级",
+      "lost": "一次 ReAct 轮次里的'模型调用'和'这一步的思考'在 trace 里共用同一个 `span_id`。"
+    },
+    {
+      "handling": "trace 里没有这些字段（`config.base_url` 有，但那是会话配置不是 span 归属），宁可不填也不猜。",
+      "item": "provider 与端点",
+      "lost": "`gen_ai.provider.name`、`server.address`、`server.port`。"
+    },
+    {
+      "handling": "`mcc.session.config` 里带着 `project_root`、`trace_path`、`base_url`。发到本机之外的 collector 就是泄露面，所以 `--endpoint` 指向非 localhost 时`mcc trace --otel` 会先打印一行警告再发。",
+      "item": "本地路径与端点地址",
+      "lost": "不丢 —— 正相反，这条是警告。"
+    },
+    {
+      "handling": "只作为属性字符串共存，不生成 `links` —— 我们要的对照信息在属性里就够读，而伪造 link 会引入一个 trace 本身没有的因果断言。",
+      "item": "span links",
+      "lost": "`tool_use_id` 与它对应的 `session_replay` / `checkpoint` 之间的引用关系。"
+    }
+  ],
+  "generated_at": "2026-09-23T04:19:32+0800",
+  "live_tokens_spent": 0,
+  "pass": true,
+  "per_trace": [
+    {
+      "coverage": {
+        "accounted_for": 36,
+        "records_emitted_as_events": 1,
+        "records_folded_into_spans": 35,
+        "records_in": 36,
+        "spans_out": 16,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 8
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 14,
+        "dropped": 0,
+        "honored": 14,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/b4-live/bug-hunt.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 278,
+        "bytes": 26426,
+        "detached_parents": 0,
+        "distinct_attribute_names": 55,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 1,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 15,
+        "red_spans": 6,
+        "roots": 1,
+        "spans": 16,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 11,
+        "time_sources": {
+          "latency-reconstructed": 9,
+          "record-timestamps": 7
+        },
+        "zero_duration_spans": 2
+      },
+      "reconciliation": {
+        "fields_checked": 215,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 8,
+        "null_fields_tallied": 8,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 10,
+        "turn": 4
+      },
+      "timing": {
+        "event_times_exact": 1,
+        "event_times_off": 0,
+        "intervals_exact": 16,
+        "intervals_off": 0,
+        "labels_exact": 16,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 16
+      },
+      "trace": {
+        "bytes": 13683,
+        "kinds": [
+          "failure_mode",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 36,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 16
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 28,
+        "records_emitted_as_events": 2,
+        "records_folded_into_spans": 26,
+        "records_in": 28,
+        "spans_out": 12,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 7
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 10,
+        "dropped": 0,
+        "honored": 10,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/b4-live/codegen.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 4,
+        "attributes": 211,
+        "bytes": 22220,
+        "detached_parents": 0,
+        "distinct_attribute_names": 57,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 2,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 11,
+        "red_spans": 1,
+        "roots": 1,
+        "spans": 12,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 8,
+        "time_sources": {
+          "latency-reconstructed": 9,
+          "record-timestamps": 3
+        },
+        "zero_duration_spans": 1
+      },
+      "reconciliation": {
+        "fields_checked": 162,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 7,
+        "null_fields_tallied": 7,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 7,
+        "turn": 3
+      },
+      "timing": {
+        "event_times_exact": 2,
+        "event_times_off": 0,
+        "intervals_exact": 12,
+        "intervals_off": 0,
+        "labels_exact": 12,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 12
+      },
+      "trace": {
+        "bytes": 12072,
+        "kinds": [
+          "failure_mode",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "todo_update",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 28,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 12
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 36,
+        "records_emitted_as_events": 0,
+        "records_folded_into_spans": 36,
+        "records_in": 36,
+        "spans_out": 16,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 9
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 14,
+        "dropped": 0,
+        "honored": 14,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/b4-live/red-tests.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 271,
+        "bytes": 26034,
+        "detached_parents": 0,
+        "distinct_attribute_names": 51,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 0,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 15,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 16,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 10,
+        "time_sources": {
+          "latency-reconstructed": 14,
+          "record-timestamps": 2
+        },
+        "zero_duration_spans": 1
+      },
+      "reconciliation": {
+        "fields_checked": 210,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 9,
+        "null_fields_tallied": 9,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 9,
+        "turn": 5
+      },
+      "timing": {
+        "event_times_exact": 0,
+        "event_times_off": 0,
+        "intervals_exact": 16,
+        "intervals_off": 0,
+        "labels_exact": 16,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 16
+      },
+      "trace": {
+        "bytes": 13772,
+        "kinds": [
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 36,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 16
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 47,
+        "records_emitted_as_events": 3,
+        "records_folded_into_spans": 44,
+        "records_in": 47,
+        "spans_out": 22,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 11
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 20,
+        "dropped": 0,
+        "honored": 20,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/bug-hunt.fake.jsonl",
+      "payload": {
+        "absolute_local_paths": 3,
+        "attributes": 378,
+        "bytes": 41672,
+        "detached_parents": 0,
+        "distinct_attribute_names": 88,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 3,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 21,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 22,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 9,
+        "time_sources": {
+          "latency-reconstructed": 6,
+          "record-timestamps": 16
+        },
+        "zero_duration_spans": 10
+      },
+      "reconciliation": {
+        "fields_checked": 292,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 11,
+        "null_fields_tallied": 11,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "fake-llm(scripted)",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "detail": 6,
+        "run": 1,
+        "session": 1,
+        "tool": 7,
+        "turn": 7
+      },
+      "timing": {
+        "event_times_exact": 3,
+        "event_times_off": 0,
+        "intervals_exact": 22,
+        "intervals_off": 0,
+        "labels_exact": 22,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 22
+      },
+      "trace": {
+        "bytes": 22512,
+        "kinds": [
+          "backend",
+          "checkpoint",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "repo_map",
+          "run_end",
+          "run_start",
+          "session_snapshot",
+          "session_start",
+          "todo_update",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 47,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 22
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 70,
+        "records_emitted_as_events": 0,
+        "records_folded_into_spans": 70,
+        "records_in": 70,
+        "spans_out": 31,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 13
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 29,
+        "dropped": 0,
+        "honored": 29,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/bug-hunt.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 533,
+        "bytes": 50444,
+        "detached_parents": 0,
+        "distinct_attribute_names": 51,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 0,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 30,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 31,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 21,
+        "time_sources": {
+          "latency-reconstructed": 29,
+          "record-timestamps": 2
+        },
+        "zero_duration_spans": 1
+      },
+      "reconciliation": {
+        "fields_checked": 416,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 13,
+        "null_fields_tallied": 13,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 20,
+        "turn": 9
+      },
+      "timing": {
+        "event_times_exact": 0,
+        "event_times_off": 0,
+        "intervals_exact": 31,
+        "intervals_off": 0,
+        "labels_exact": 31,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 31
+      },
+      "trace": {
+        "bytes": 26824,
+        "kinds": [
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 70,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 31
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 59,
+        "records_emitted_as_events": 4,
+        "records_folded_into_spans": 55,
+        "records_in": 59,
+        "spans_out": 29,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 12
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 27,
+        "dropped": 0,
+        "honored": 27,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/codegen.fake.jsonl",
+      "payload": {
+        "absolute_local_paths": 3,
+        "attributes": 479,
+        "bytes": 50292,
+        "detached_parents": 0,
+        "distinct_attribute_names": 88,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 4,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 28,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 29,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 11,
+        "time_sources": {
+          "latency-reconstructed": 7,
+          "record-timestamps": 22
+        },
+        "zero_duration_spans": 13
+      },
+      "reconciliation": {
+        "fields_checked": 365,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 12,
+        "null_fields_tallied": 12,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "fake-llm(scripted)",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "detail": 10,
+        "run": 1,
+        "session": 1,
+        "tool": 9,
+        "turn": 8
+      },
+      "timing": {
+        "event_times_exact": 4,
+        "event_times_off": 0,
+        "intervals_exact": 29,
+        "intervals_off": 0,
+        "labels_exact": 29,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 29
+      },
+      "trace": {
+        "bytes": 26294,
+        "kinds": [
+          "backend",
+          "checkpoint",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "repo_map",
+          "run_end",
+          "run_start",
+          "session_snapshot",
+          "session_start",
+          "todo_update",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 59,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 29
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 63,
+        "records_emitted_as_events": 4,
+        "records_folded_into_spans": 59,
+        "records_in": 63,
+        "spans_out": 26,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 14
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 24,
+        "dropped": 0,
+        "honored": 24,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/codegen.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 455,
+        "bytes": 48507,
+        "detached_parents": 0,
+        "distinct_attribute_names": 53,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 4,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 25,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 26,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 17,
+        "time_sources": {
+          "latency-reconstructed": 20,
+          "record-timestamps": 6
+        },
+        "zero_duration_spans": 3
+      },
+      "reconciliation": {
+        "fields_checked": 353,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 14,
+        "null_fields_tallied": 14,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 16,
+        "turn": 8
+      },
+      "timing": {
+        "event_times_exact": 4,
+        "event_times_off": 0,
+        "intervals_exact": 26,
+        "intervals_off": 0,
+        "labels_exact": 26,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 26
+      },
+      "trace": {
+        "bytes": 27591,
+        "kinds": [
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "todo_update",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 63,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 26
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 43,
+        "records_emitted_as_events": 4,
+        "records_folded_into_spans": 39,
+        "records_in": 43,
+        "spans_out": 20,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 8
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 18,
+        "dropped": 0,
+        "honored": 18,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/giveup.fake.jsonl",
+      "payload": {
+        "absolute_local_paths": 3,
+        "attributes": 350,
+        "bytes": 35368,
+        "detached_parents": 0,
+        "distinct_attribute_names": 92,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 4,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 19,
+        "red_spans": 1,
+        "roots": 1,
+        "spans": 20,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 8,
+        "time_sources": {
+          "latency-reconstructed": 5,
+          "record-timestamps": 15
+        },
+        "zero_duration_spans": 6
+      },
+      "reconciliation": {
+        "fields_checked": 270,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 8,
+        "null_fields_tallied": 8,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "fake-llm(scripted)",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "detail": 6,
+        "run": 1,
+        "session": 1,
+        "tool": 6,
+        "turn": 6
+      },
+      "timing": {
+        "event_times_exact": 4,
+        "event_times_off": 0,
+        "intervals_exact": 20,
+        "intervals_off": 0,
+        "labels_exact": 20,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 20
+      },
+      "trace": {
+        "bytes": 18109,
+        "kinds": [
+          "backend",
+          "checkpoint",
+          "failure_mode",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "repo_map",
+          "run_end",
+          "run_start",
+          "session_snapshot",
+          "session_start",
+          "todo_update",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 43,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 20
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 22,
+        "records_emitted_as_events": 2,
+        "records_folded_into_spans": 20,
+        "records_in": 22,
+        "spans_out": 9,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 8
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 7,
+        "dropped": 0,
+        "honored": 7,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/readonly-qa.fake.jsonl",
+      "payload": {
+        "absolute_local_paths": 3,
+        "attributes": 179,
+        "bytes": 18463,
+        "detached_parents": 0,
+        "distinct_attribute_names": 75,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 2,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 8,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 9,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 6,
+        "time_sources": {
+          "latency-reconstructed": 4,
+          "record-timestamps": 5
+        },
+        "zero_duration_spans": 1
+      },
+      "reconciliation": {
+        "fields_checked": 142,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 8,
+        "null_fields_tallied": 8,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "fake-llm(scripted)",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 4,
+        "turn": 3
+      },
+      "timing": {
+        "event_times_exact": 2,
+        "event_times_off": 0,
+        "intervals_exact": 9,
+        "intervals_off": 0,
+        "labels_exact": 9,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 9
+      },
+      "trace": {
+        "bytes": 9784,
+        "kinds": [
+          "backend",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "repo_map",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 22,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 9
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 27,
+        "records_emitted_as_events": 0,
+        "records_folded_into_spans": 27,
+        "records_in": 27,
+        "spans_out": 12,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 8
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 10,
+        "dropped": 0,
+        "honored": 10,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/readonly-qa.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 201,
+        "bytes": 19191,
+        "detached_parents": 0,
+        "distinct_attribute_names": 50,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 0,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 11,
+        "red_spans": 2,
+        "roots": 1,
+        "spans": 12,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 7,
+        "time_sources": {
+          "latency-reconstructed": 8,
+          "record-timestamps": 4
+        },
+        "zero_duration_spans": 1
+      },
+      "reconciliation": {
+        "fields_checked": 155,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 8,
+        "null_fields_tallied": 8,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 6,
+        "turn": 4
+      },
+      "timing": {
+        "event_times_exact": 0,
+        "event_times_off": 0,
+        "intervals_exact": 12,
+        "intervals_off": 0,
+        "labels_exact": 12,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 12
+      },
+      "trace": {
+        "bytes": 10013,
+        "kinds": [
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 27,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 12
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 61,
+        "records_emitted_as_events": 4,
+        "records_folded_into_spans": 57,
+        "records_in": 61,
+        "spans_out": 27,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 11
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 25,
+        "dropped": 0,
+        "honored": 25,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/red-tests.fake.jsonl",
+      "payload": {
+        "absolute_local_paths": 3,
+        "attributes": 471,
+        "bytes": 48250,
+        "detached_parents": 0,
+        "distinct_attribute_names": 88,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 4,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 26,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 27,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 11,
+        "time_sources": {
+          "latency-reconstructed": 8,
+          "record-timestamps": 19
+        },
+        "zero_duration_spans": 8
+      },
+      "reconciliation": {
+        "fields_checked": 367,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 11,
+        "null_fields_tallied": 11,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "fake-llm(scripted)",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "detail": 6,
+        "run": 1,
+        "session": 1,
+        "tool": 9,
+        "turn": 10
+      },
+      "timing": {
+        "event_times_exact": 4,
+        "event_times_off": 0,
+        "intervals_exact": 27,
+        "intervals_off": 0,
+        "labels_exact": 27,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 27
+      },
+      "trace": {
+        "bytes": 25826,
+        "kinds": [
+          "backend",
+          "checkpoint",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "repo_map",
+          "run_end",
+          "run_start",
+          "session_snapshot",
+          "session_start",
+          "todo_update",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 61,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 27
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 48,
+        "records_emitted_as_events": 1,
+        "records_folded_into_spans": 47,
+        "records_in": 48,
+        "spans_out": 21,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 13
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 19,
+        "dropped": 0,
+        "honored": 19,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "demos/traces/red-tests.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 361,
+        "bytes": 35560,
+        "detached_parents": 0,
+        "distinct_attribute_names": 55,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 1,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 20,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 21,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 14,
+        "time_sources": {
+          "latency-reconstructed": 19,
+          "record-timestamps": 2
+        },
+        "zero_duration_spans": 1
+      },
+      "reconciliation": {
+        "fields_checked": 280,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 13,
+        "null_fields_tallied": 13,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 13,
+        "turn": 6
+      },
+      "timing": {
+        "event_times_exact": 1,
+        "event_times_off": 0,
+        "intervals_exact": 21,
+        "intervals_off": 0,
+        "labels_exact": 21,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 21
+      },
+      "trace": {
+        "bytes": 19190,
+        "kinds": [
+          "failure_mode",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 48,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 21
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 37,
+        "records_emitted_as_events": 37,
+        "records_folded_into_spans": 0,
+        "records_in": 37,
+        "spans_out": 1,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 0
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 0,
+        "added_to_anchor": 0,
+        "declared": 0,
+        "dropped": 0,
+        "honored": 0,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": [
+          "run_end.redundant_calls"
+        ]
+      },
+      "path": "demos/traces/v1-baseline/bug-hunt.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 195,
+        "bytes": 18717,
+        "detached_parents": 0,
+        "distinct_attribute_names": 33,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 37,
+        "null_values": 0,
+        "orphan_host_spans": 1,
+        "parented_spans": 0,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 1,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 12,
+        "time_sources": {
+          "record-timestamps": 1
+        },
+        "zero_duration_spans": 0
+      },
+      "reconciliation": {
+        "fields_checked": 156,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 0,
+        "null_fields_tallied": 0,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "orphan": 1
+      },
+      "timing": {
+        "event_times_exact": 37,
+        "event_times_off": 0,
+        "intervals_exact": 1,
+        "intervals_off": 0,
+        "labels_exact": 1,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 1
+      },
+      "trace": {
+        "bytes": 7527,
+        "kinds": [
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 37,
+        "schema_versions": [
+          "none"
+        ],
+        "sessions": 1,
+        "span_ids": 0
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 67,
+        "records_emitted_as_events": 67,
+        "records_folded_into_spans": 0,
+        "records_in": 67,
+        "spans_out": 1,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 0
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 0,
+        "added_to_anchor": 0,
+        "declared": 0,
+        "dropped": 0,
+        "honored": 0,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": [
+          "run_end.redundant_calls"
+        ]
+      },
+      "path": "demos/traces/v1-baseline/codegen.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 4,
+        "attributes": 340,
+        "bytes": 36425,
+        "detached_parents": 0,
+        "distinct_attribute_names": 35,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 67,
+        "null_values": 0,
+        "orphan_host_spans": 1,
+        "parented_spans": 0,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 1,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 20,
+        "time_sources": {
+          "record-timestamps": 1
+        },
+        "zero_duration_spans": 0
+      },
+      "reconciliation": {
+        "fields_checked": 271,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 0,
+        "null_fields_tallied": 0,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "orphan": 1
+      },
+      "timing": {
+        "event_times_exact": 67,
+        "event_times_off": 0,
+        "intervals_exact": 1,
+        "intervals_off": 0,
+        "labels_exact": 1,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 1
+      },
+      "trace": {
+        "bytes": 16944,
+        "kinds": [
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "todo_update",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 67,
+        "schema_versions": [
+          "none"
+        ],
+        "sessions": 1,
+        "span_ids": 0
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 28,
+        "records_emitted_as_events": 28,
+        "records_folded_into_spans": 0,
+        "records_in": 28,
+        "spans_out": 1,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 0
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 0,
+        "added_to_anchor": 0,
+        "declared": 0,
+        "dropped": 0,
+        "honored": 0,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": [
+          "run_end.redundant_calls"
+        ]
+      },
+      "path": "demos/traces/v1-baseline/readonly-qa.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 143,
+        "bytes": 13760,
+        "detached_parents": 0,
+        "distinct_attribute_names": 33,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 28,
+        "null_values": 0,
+        "orphan_host_spans": 1,
+        "parented_spans": 0,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 1,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 7,
+        "time_sources": {
+          "record-timestamps": 1
+        },
+        "zero_duration_spans": 0
+      },
+      "reconciliation": {
+        "fields_checked": 113,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 0,
+        "null_fields_tallied": 0,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "orphan": 1
+      },
+      "timing": {
+        "event_times_exact": 28,
+        "event_times_off": 0,
+        "intervals_exact": 1,
+        "intervals_off": 0,
+        "labels_exact": 1,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 1
+      },
+      "trace": {
+        "bytes": 5338,
+        "kinds": [
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 28,
+        "schema_versions": [
+          "none"
+        ],
+        "sessions": 1,
+        "span_ids": 0
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 35,
+        "records_emitted_as_events": 35,
+        "records_folded_into_spans": 0,
+        "records_in": 35,
+        "spans_out": 1,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 0
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 0,
+        "added_to_anchor": 0,
+        "declared": 0,
+        "dropped": 0,
+        "honored": 0,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": [
+          "run_end.redundant_calls"
+        ]
+      },
+      "path": "demos/traces/v1-baseline/red-tests.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 184,
+        "bytes": 17858,
+        "detached_parents": 0,
+        "distinct_attribute_names": 33,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 35,
+        "null_values": 0,
+        "orphan_host_spans": 1,
+        "parented_spans": 0,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 1,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 11,
+        "time_sources": {
+          "record-timestamps": 1
+        },
+        "zero_duration_spans": 0
+      },
+      "reconciliation": {
+        "fields_checked": 147,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 0,
+        "null_fields_tallied": 0,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "orphan": 1
+      },
+      "timing": {
+        "event_times_exact": 35,
+        "event_times_off": 0,
+        "intervals_exact": 1,
+        "intervals_off": 0,
+        "labels_exact": 1,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 1
+      },
+      "trace": {
+        "bytes": 7257,
+        "kinds": [
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 35,
+        "schema_versions": [
+          "none"
+        ],
+        "sessions": 1,
+        "span_ids": 0
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 86,
+        "records_emitted_as_events": 6,
+        "records_folded_into_spans": 80,
+        "records_in": 86,
+        "spans_out": 42,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 16
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 40,
+        "dropped": 0,
+        "honored": 40,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "eval/results/b2-live-budget-probe.traces/sample01/gf-calculator.r0.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 3,
+        "attributes": 697,
+        "bytes": 72440,
+        "detached_parents": 0,
+        "distinct_attribute_names": 89,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 6,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 41,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 42,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 19,
+        "time_sources": {
+          "latency-reconstructed": 23,
+          "record-timestamps": 19
+        },
+        "zero_duration_spans": 15
+      },
+      "reconciliation": {
+        "fields_checked": 531,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 16,
+        "null_fields_tallied": 16,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "detail": 13,
+        "run": 1,
+        "session": 1,
+        "tool": 17,
+        "turn": 10
+      },
+      "timing": {
+        "event_times_exact": 6,
+        "event_times_off": 0,
+        "intervals_exact": 42,
+        "intervals_off": 0,
+        "labels_exact": 42,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 42
+      },
+      "trace": {
+        "bytes": 38033,
+        "kinds": [
+          "backend",
+          "checkpoint",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "repo_map",
+          "run_end",
+          "run_start",
+          "session_snapshot",
+          "session_start",
+          "todo_update",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 86,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 42
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 158,
+        "records_emitted_as_events": 5,
+        "records_folded_into_spans": 153,
+        "records_in": 158,
+        "spans_out": 81,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 20
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 79,
+        "dropped": 0,
+        "honored": 79,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "eval/results/b2-live-budget-probe.traces/sample02/gf-calculator.r0.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 3,
+        "attributes": 1347,
+        "bytes": 135985,
+        "detached_parents": 0,
+        "distinct_attribute_names": 98,
+        "empty_string_attributes": 6,
+        "empty_strings_in_source": 6,
+        "endpoint_like_strings": 1,
+        "events": 5,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 80,
+        "red_spans": 1,
+        "roots": 1,
+        "spans": 81,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 43,
+        "time_sources": {
+          "latency-reconstructed": 50,
+          "record-timestamps": 31
+        },
+        "zero_duration_spans": 27
+      },
+      "reconciliation": {
+        "fields_checked": 1034,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 20,
+        "null_fields_tallied": 20,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "detail": 26,
+        "run": 1,
+        "session": 1,
+        "tool": 35,
+        "turn": 18
+      },
+      "timing": {
+        "event_times_exact": 5,
+        "event_times_off": 0,
+        "intervals_exact": 81,
+        "intervals_off": 0,
+        "labels_exact": 81,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 81
+      },
+      "trace": {
+        "bytes": 69897,
+        "kinds": [
+          "backend",
+          "checkpoint",
+          "context_compact",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "repo_map",
+          "run_end",
+          "run_start",
+          "session_snapshot",
+          "session_start",
+          "todo_update",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 158,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 81
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 48,
+        "records_emitted_as_events": 0,
+        "records_folded_into_spans": 48,
+        "records_in": 48,
+        "spans_out": 21,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 10
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 19,
+        "dropped": 0,
+        "honored": 19,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "eval/results/live-smoke.traces/bh-format-duration.r0.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 358,
+        "bytes": 34352,
+        "detached_parents": 0,
+        "distinct_attribute_names": 52,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 0,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 20,
+        "red_spans": 1,
+        "roots": 1,
+        "spans": 21,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 13,
+        "time_sources": {
+          "latency-reconstructed": 18,
+          "record-timestamps": 3
+        },
+        "zero_duration_spans": 1
+      },
+      "reconciliation": {
+        "fields_checked": 279,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 10,
+        "null_fields_tallied": 10,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 12,
+        "turn": 7
+      },
+      "timing": {
+        "event_times_exact": 0,
+        "event_times_off": 0,
+        "intervals_exact": 21,
+        "intervals_off": 0,
+        "labels_exact": 21,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 21
+      },
+      "trace": {
+        "bytes": 18482,
+        "kinds": [
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 48,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 21
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 27,
+        "records_emitted_as_events": 0,
+        "records_folded_into_spans": 27,
+        "records_in": 27,
+        "spans_out": 12,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 7
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 10,
+        "dropped": 0,
+        "honored": 10,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "eval/results/live-smoke.traces/bh-readonly-explain.r0.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 202,
+        "bytes": 19321,
+        "detached_parents": 0,
+        "distinct_attribute_names": 51,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 0,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 11,
+        "red_spans": 2,
+        "roots": 1,
+        "spans": 12,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 7,
+        "time_sources": {
+          "latency-reconstructed": 8,
+          "record-timestamps": 4
+        },
+        "zero_duration_spans": 2
+      },
+      "reconciliation": {
+        "fields_checked": 156,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 7,
+        "null_fields_tallied": 7,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 6,
+        "turn": 4
+      },
+      "timing": {
+        "event_times_exact": 0,
+        "event_times_off": 0,
+        "intervals_exact": 12,
+        "intervals_off": 0,
+        "labels_exact": 12,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 12
+      },
+      "trace": {
+        "bytes": 10072,
+        "kinds": [
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 27,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 12
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 27,
+        "records_emitted_as_events": 0,
+        "records_folded_into_spans": 27,
+        "records_in": 27,
+        "spans_out": 12,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 6
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 10,
+        "dropped": 0,
+        "honored": 10,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "eval/results/live-smoke.traces/csv-add-export.r0.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 203,
+        "bytes": 19746,
+        "detached_parents": 0,
+        "distinct_attribute_names": 52,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 0,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 11,
+        "red_spans": 1,
+        "roots": 1,
+        "spans": 12,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 7,
+        "time_sources": {
+          "latency-reconstructed": 8,
+          "record-timestamps": 4
+        },
+        "zero_duration_spans": 2
+      },
+      "reconciliation": {
+        "fields_checked": 157,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 6,
+        "null_fields_tallied": 6,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 6,
+        "turn": 4
+      },
+      "timing": {
+        "event_times_exact": 0,
+        "event_times_off": 0,
+        "intervals_exact": 12,
+        "intervals_off": 0,
+        "labels_exact": 12,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 12
+      },
+      "trace": {
+        "bytes": 10408,
+        "kinds": [
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 27,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 12
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 43,
+        "records_emitted_as_events": 0,
+        "records_folded_into_spans": 43,
+        "records_in": 43,
+        "spans_out": 19,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 8
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 17,
+        "dropped": 0,
+        "honored": 17,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "eval/results/live-smoke.traces/csv-implement-describe.r0.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 325,
+        "bytes": 31353,
+        "detached_parents": 0,
+        "distinct_attribute_names": 52,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 0,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 18,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 19,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 12,
+        "time_sources": {
+          "latency-reconstructed": 17,
+          "record-timestamps": 2
+        },
+        "zero_duration_spans": 1
+      },
+      "reconciliation": {
+        "fields_checked": 253,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 8,
+        "null_fields_tallied": 8,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 11,
+        "turn": 6
+      },
+      "timing": {
+        "event_times_exact": 0,
+        "event_times_off": 0,
+        "intervals_exact": 19,
+        "intervals_off": 0,
+        "labels_exact": 19,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 19
+      },
+      "trace": {
+        "bytes": 16739,
+        "kinds": [
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 43,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 19
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 23,
+        "records_emitted_as_events": 0,
+        "records_folded_into_spans": 23,
+        "records_in": 23,
+        "spans_out": 11,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 6
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 9,
+        "dropped": 0,
+        "honored": 9,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "eval/results/live-smoke.traces/csv-qa-scope.r0.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 177,
+        "bytes": 17264,
+        "detached_parents": 0,
+        "distinct_attribute_names": 51,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 0,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 10,
+        "red_spans": 0,
+        "roots": 1,
+        "spans": 11,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 6,
+        "time_sources": {
+          "latency-reconstructed": 8,
+          "record-timestamps": 3
+        },
+        "zero_duration_spans": 2
+      },
+      "reconciliation": {
+        "fields_checked": 133,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 6,
+        "null_fields_tallied": 6,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 6,
+        "turn": 3
+      },
+      "timing": {
+        "event_times_exact": 0,
+        "event_times_off": 0,
+        "intervals_exact": 11,
+        "intervals_off": 0,
+        "labels_exact": 11,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 11
+      },
+      "trace": {
+        "bytes": 8705,
+        "kinds": [
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 23,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 11
+      },
+      "validation": []
+    },
+    {
+      "coverage": {
+        "accounted_for": 91,
+        "records_emitted_as_events": 5,
+        "records_folded_into_spans": 86,
+        "records_in": 91,
+        "spans_out": 37,
+        "unaccounted": 0,
+        "unrepresentable_nulls": 18
+      },
+      "deterministic": true,
+      "edges": {
+        "added": 1,
+        "added_to_anchor": 1,
+        "declared": 35,
+        "dropped": 0,
+        "honored": 35,
+        "noncanonical_ids": 0,
+        "rewired": 0
+      },
+      "masked_prefixes_in_payload": 0,
+      "naming": {
+        "invented": [],
+        "unqualified": [],
+        "unregistered_fields": []
+      },
+      "path": "eval/results/live-smoke.traces/gf-calculator.r0.live.jsonl",
+      "payload": {
+        "absolute_local_paths": 2,
+        "attributes": 649,
+        "bytes": 67978,
+        "detached_parents": 0,
+        "distinct_attribute_names": 58,
+        "empty_string_attributes": 0,
+        "empty_strings_in_source": 0,
+        "endpoint_like_strings": 1,
+        "events": 5,
+        "null_values": 0,
+        "orphan_host_spans": 0,
+        "parented_spans": 36,
+        "red_spans": 3,
+        "roots": 1,
+        "spans": 37,
+        "spans_without_time_source": 0,
+        "string_values_holding_json": 23,
+        "time_sources": {
+          "latency-reconstructed": 31,
+          "record-timestamps": 6
+        },
+        "zero_duration_spans": 3
+      },
+      "reconciliation": {
+        "fields_checked": 507,
+        "fields_lost": {},
+        "fields_moved_under_another_name": {},
+        "fields_null_skipped": 18,
+        "null_fields_tallied": 18,
+        "records_without_a_stamp": 0
+      },
+      "resource": {
+        "attributes": {
+          "gen_ai.request.model": "agnes-2.5-flash",
+          "mcc.session.count": "1",
+          "mcc.trace.schema_version": "2.0",
+          "service.name": "miniclaude"
+        },
+        "disagreements": [],
+        "empty_string_attributes": 0
+      },
+      "roles": {
+        "run": 1,
+        "session": 1,
+        "tool": 22,
+        "turn": 13
+      },
+      "timing": {
+        "event_times_exact": 5,
+        "event_times_off": 0,
+        "intervals_exact": 37,
+        "intervals_off": 0,
+        "labels_exact": 37,
+        "labels_off": 0,
+        "records_without_a_host": 0,
+        "spans_checked": 37
+      },
+      "trace": {
+        "bytes": 39042,
+        "kinds": [
+          "failure_mode",
+          "llm_request",
+          "llm_response",
+          "permission",
+          "run_end",
+          "run_start",
+          "session_start",
+          "todo_update",
+          "tool_call",
+          "turn_start"
+        ],
+        "masked_prefixes": 0,
+        "records": 91,
+        "schema_versions": [
+          "2.0"
+        ],
+        "sessions": 1,
+        "span_ids": 37
+      },
+      "validation": []
+    }
+  ],
+  "schema": 1,
+  "spec": "SPEC v2 §7.3-3（OTLP 导出器，Tier 3）/ §3.1 导出映射不引入 SDK",
+  "totals": {
+    "absolute_local_paths": 59,
+    "attributes": 8987,
+    "audit_flags": {
+      "invented": [],
+      "unqualified": [],
+      "unregistered_fields": [
+        "run_end.redundant_calls"
+      ]
+    },
+    "clauses_count": 18,
+    "corpus_files_changed": 0,
+    "detached_parents": 0,
+    "deterministic": 24,
+    "distinct_attribute_names": 103,
+    "edges": {
+      "added": 20,
+      "added_to_anchor": 20,
+      "declared": 436,
+      "dropped": 0,
+      "honored": 436,
+      "noncanonical_ids": 0,
+      "rewired": 0
+    },
+    "empty_string_attributes": 6,
+    "empty_strings_in_source": 6,
+    "endpoint_like_strings": 24,
+    "events": 208,
+    "fields_checked": 6964,
+    "fields_lost": 0,
+    "fields_moved": 0,
+    "fields_null_skipped": 213,
+    "files": 24,
+    "growth_ratio": 1.91,
+    "masked_prefixes_in_payload": 0,
+    "masked_prefixes_in_trace": 0,
+    "null_fields_tallied": 213,
+    "null_values_in_payload": 0,
+    "orphan_host_spans": 4,
+    "parented_spans": 456,
+    "payload_bytes": 907626,
+    "records": 1210,
+    "records_without_a_stamp": 0,
+    "red_spans": 18,
+    "resource_disagreement_samples": [],
+    "resource_disagreements": 0,
+    "resource_empty_strings": 0,
+    "resource_names_present_in": {
+      "gen_ai.request.model": 24,
+      "mcc.session.count": 24,
+      "mcc.trace.schema_version": 20,
+      "service.name": 24
+    },
+    "roots": 24,
+    "sessions": 24,
+    "source_span_ids": 476,
+    "spans": 480,
+    "spans_without_time_source": 0,
+    "string_values_holding_json": 313,
+    "time_sources": {
+      "latency-reconstructed": 301,
+      "record-timestamps": 179
+    },
+    "timing": {
+      "event_times_exact": 208,
+      "event_times_off": 0,
+      "intervals_exact": 480,
+      "intervals_off": 0,
+      "labels_exact": 480,
+      "labels_off": 0,
+      "records_without_a_host": 0,
+      "spans_checked": 480
+    },
+    "trace_bytes": 474114,
+    "unaccounted": 0,
+    "unrepresentable_nulls": 213,
+    "validation_problems": 0,
+    "zero_duration_spans": 101
+  },
+  "unmeasured": [
+    "a_real_collector_accepts_the_payload"
+  ],
+  "wall_seconds": 5.52,
+  "what_this_does_not_prove": [
+    "真实收集端收下并画出树 —— http://localhost:4318/v1/traces 回了 HTTP 502（响应体是空的）。按**未量**记账而不是判 ✗：不是 OTLP 的服务和没人应答的端口，都不构成'我们的 payload 被拒'的证据（见 a_real_collector_accepts_the_payload；探针发的是手写的 4 条记录，不带仓库内容）",
+    "逐字段核对覆盖 6,964 个值，但 213 个 null 是**跳过**的：",
+    "协议里没有 null 这个值，所以它们的下场是'属性缺席 + 计数'，不是'翻对了'",
+    "属性名对齐 GenAI 语义约定这件事由 FIELD_MAP 与单测钉住，不代表收集端按约定的方式解释它们",
+    "payload 里带着绝对本地路径与端点地址（`mcc.session.config`），这份证据不证明跨机发送是安全的"
+  ],
+  "what_this_proves": [
+    "every_committed_trace_exports：24/24 份已入库轨迹都翻得成 OTLP/JSON，且收集端协议层校验 0 问题",
+    "no_record_is_lost：一条记录都不丢（折叠数 + event 数 = 输入数，从 payload 反查而不是读导出器自己的账本）",
+    "no_field_value_is_lost：一个字段值都不丢（逐字段按 FIELD_MAP 算出该挂的名字，再核对编码后的值）",
+    "no_field_name_is_invented：属性名全部有出处：不是 FIELD_MAP 登记的、就是默认命名/账目属性，且没有裸名",
+    "the_resource_only_says_what_the_trace_says：资源属性逐条回对：报出的会话数/模型/版本就是 trace 里的那个集合，没报的一定是 trace 里真没有的（空串不等于缺席）—— 盯的是导出器唯一一处自己开口的地方",
+    "no_span_is_invented：span 数 == 源 span_id 数 + 承载 span 数，且承载 span 只出现在没有 span_id 的旧轨迹里",
+    "edges_follow_the_trace：每条父子边都在 trace 里找到出处：声明过的没被改写，凭空多出来的只落在会话/run 锚点上",
+    "v1_traces_collapse_honestly：没有 span_id 的旧轨迹翻得出来，但只有一层，且不编父子关系",
+    "the_export_is_deterministic：同一份输入两次 translate() 字节相同（不依赖 dict 序、不掺时钟）",
+    "cli_and_library_agree：`mcc trace --otel --out` 写出的字节 == 库函数对同一会话产出的字节（含换行、无 \\r）",
+    "secrets_stay_out：密钥串不出导出器（按形状判，不去读那把真钥匙）",
+    "nulls_have_no_home_and_say_so：null 字段既不伪装成空串也不留进 payload，而是缺席 + 计数 + 写进 gaps",
+    "intervals_come_from_the_timestamps：每个 span 的起止都真的由这批记录的 ts/latency 算出来，event 时刻等于它那条记录的 ts",
+    "every_span_declares_where_its_time_came_from：每个 span 都自述 `mcc.span.time_source`，且自述的和重算的一致",
+    "nested_structures_become_json_strings：嵌套结构落为 JSON 字符串属性 —— 这是 gaps 里写明的翻译代价，量一下有多大",
+    "the_corpus_is_read_only：这份证据不改动它的输入（跑一次不写坏 24 份已入库轨迹）",
+    "detectors_fire_on_planted_errors：上面每条判据的 detector 都不是摆设：把那种错塞进去一次，它就得红一次"
+  ]
+}

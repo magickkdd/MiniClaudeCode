@@ -9,17 +9,21 @@ JD 里"Agent debugging 工具"这一项的直接答案。三条设计约束：
    恰恰最需要跑得起来，因此这里只用 str.format 排版。
 3. **说不出失败原因时要说"规则没看出来"**，而不是沉默 —— 没命中规则
    不等于任务做对了。
+4. **`--otel` 那条路先自检再发。** 一份收集端会整批拒收的 payload 打到 stdout 上看起来
+   是成功，所以校验不过就退 1、一个字节都不发（翻译细节在 `infra/otel.py`）。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Sequence
 
 from miniclaude.config import Config
 from miniclaude.infra.failure import Finding, RunFacts, classify, facts_from_records
+from miniclaude.infra.otel import gaps, is_local, post_otlp, translate, validate
 from miniclaude.infra.trace import (
     SCHEMA_VERSION,
     hotspots,
@@ -30,6 +34,7 @@ from miniclaude.infra.trace import (
 )
 
 MAX_ROWS = 40
+MAX_PROBLEMS_SHOWN = 8
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -43,6 +48,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--why-failed", action="store_true", help="失败模式标签 + 证据 + 处方")
     parser.add_argument("--json", dest="as_json", action="store_true", help="输出机器可读的汇总")
     parser.add_argument("--file", type=Path, default=None, help="日志路径（默认取 TRACE_PATH）")
+    parser.add_argument(
+        "--otel",
+        action="store_true",
+        help="导出 OTLP/JSON（SPEC v2 §3.1 的那层翻译：只翻译，不引入 OTel SDK）",
+    )
+    parser.add_argument("--out", type=Path, default=None, help="OTLP 落盘路径（省略则打到 stdout）")
+    parser.add_argument(
+        "--endpoint",
+        default=None,
+        help="POST 到 OTLP/HTTP collector，例如 http://localhost:4318/v1/traces",
+    )
     parser.add_argument("--limit", type=int, default=MAX_ROWS, help="时间线最多显示多少轮")
     return parser
 
@@ -71,10 +87,80 @@ def run(argv: Sequence[str], config: Config) -> int:
         print(f"找不到会话 {asked!r}。这个文件里有 {len(known)} 个会话：{', '.join(known[-10:])}")
         return 2
 
+    if args.otel:
+        return _export_otlp(selected, args)
     if args.as_json:
         print(json.dumps(summarize_records(selected), ensure_ascii=False, indent=2, default=str))
         return 0
     print(_render_records(selected, path, args))
+    return 0
+
+
+def _export_otlp(records: list[dict[str, Any]], args: argparse.Namespace) -> int:
+    """导出这条路只有一条规矩：**校验不过就一个字节都不发**。
+
+    一份收集端会整批拒收的 payload 打到 stdout 上，看起来是成功；Jaeger 里少一半 span
+    没人会怀疑到自己头上。所以这里先 `validate()`，红了就报错退 1。
+    """
+    payload, cov = translate(records)
+    print(
+        "OTLP/JSON：{rec} 条记录 → {span} 个 span（{evt} 条没有 span_id，挂成 event）· "
+        "{root} 个根 · {red} 个红 span · {null} 个 null 字段在协议里没有位置".format(
+            rec=cov["records_in"],
+            span=cov["spans_out"],
+            evt=cov["records_emitted_as_events"],
+            root=cov["roots"],
+            red=cov["red_spans"],
+            null=cov["unrepresentable_nulls"],
+        ),
+        file=sys.stderr,
+    )
+    problems = validate(payload)
+    if problems:
+        print(f"校验未过（{len(problems)} 条），没有导出：", file=sys.stderr)
+        for problem in problems[:MAX_PROBLEMS_SHOWN]:
+            print(f"  · {problem}", file=sys.stderr)
+        if len(problems) > MAX_PROBLEMS_SHOWN:
+            print(f"  …另有 {len(problems) - MAX_PROBLEMS_SHOWN} 条", file=sys.stderr)
+        return 1
+    if cov["detached_parents"]:
+        print(
+            f"注意：{cov['detached_parents']} 个 span 的父亲不在这份会话里"
+            "（会话被截断过？）。没有重挂到别的父亲上，断掉的 id 留在 "
+            "`mcc.span.detached_parent_id` 里。",
+            file=sys.stderr,
+        )
+
+    text = json.dumps(payload, ensure_ascii=False)
+    if args.out:
+        # 写字节而不是写文本：导出物的字节序列要跨平台稳定，而 Windows 的文本模式会把
+        # 结尾那个 "\n" 换成 "\r\n" —— 同一份轨迹在两台机器上就会得到两个 sha。
+        blob = (text + "\n").encode("utf-8")
+        try:
+            Path(args.out).write_bytes(blob)
+        except OSError as exc:
+            print(f"写不出去：{exc}", file=sys.stderr)
+            return 2
+        print(f"已写 {args.out}（{len(blob):,} 字节）", file=sys.stderr)
+    else:
+        print(text)
+
+    if args.endpoint:
+        if not is_local(args.endpoint):
+            print(
+                "警告：endpoint 不在本机。`mcc.session.config` 里带着 project_root、trace_path"
+                "和端点地址 —— 这些是 trace 本来就有的东西，出了这台机器就是泄露面。",
+                file=sys.stderr,
+            )
+        receipt = post_otlp(payload, args.endpoint)
+        if receipt["ok"]:
+            print(f"已发送 {receipt['bytes']:,} 字节 → {receipt['status_code']}", file=sys.stderr)
+        else:
+            print(f"发送失败：{receipt['error']}", file=sys.stderr)
+            return 1
+    else:
+        for gap in gaps():
+            print(f"翻不过去：{gap['item']} —— {gap['handling']}", file=sys.stderr)
     return 0
 
 
