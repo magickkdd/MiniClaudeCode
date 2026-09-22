@@ -23,7 +23,7 @@
 
 注意最后那句自我更正：**优先级 bug 是测试抓出来的，不是模型看出来的**。这就是 `run_tests` 作为判据而不是装饰的意义。
 
-当前状态：**477 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2 的 fake 侧**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，12 条判据与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)，真实端点那 5 次尚未跑，所以这一条验收线只算完成一半；S11 交付了仓库符号地图与 `.mcc/` 工作记忆（见 §4.8）：两臂只差 `--no-repo-map` 一个开关，7 条机制判据（地图**换掉**目录树、地图计入 `context_peak`、零额外 LLM 调用、两臂 system 不同）离线全绿；真实模型那半条跑完了，结论是 **B3 未达成** —— token 侧 ✓（`context_peak` p95 涨幅 +5.4%，线是 ≤15%），轮数侧 ✗（`steps_to_success` 中位 6.0 → 6.0，降幅 0%，线是 ≥20%），通过数还从 14/18 掉到 13/18。这是一次有效的证伪而不是无效实验（脚本先证明了配对成立），20% 这条线保持原样，重测计划记在 SPEC §7.3-5，全部数字见 [`eval/results/b3-repomap-ab.json`](eval/results/b3-repomap-ab.json)。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
+当前状态：**480 项测试全绿**。v2.0 的 S8 把"数字怎么来的"修成可核对的口径（trace schema 2.0、发起数与执行数分离、8 条失败模式规则、`mcc trace --why-failed`、[`demos/results/failure-labels.md`](demos/results/failure-labels.md) 的 16 条人工核对表）；S9 交付了评测层（**B1**）：24 道考题 × 3 次的 fake 全批 72 次运行 `pass@1=20/24`、退出码 0，基线 `eval/baselines/fake-0935fa95ca49.json` 已入库，另有 6 题 live 冒烟 `4/6`（证据与两道失败各自的成因见 [`eval/results/`](eval/results/)）；S10 交付了上下文压缩阶梯（**B2 的 fake 侧**，见 §4.7）：同一道必然超预算的题，关阶梯第 5 轮死在 `l3_refuse`、开阶梯 19 轮全绿，12 条判据与三臂数字落在 [`eval/results/b2-compact-ab.json`](eval/results/b2-compact-ab.json)；真实端点那 5 次今天签不了字 —— 试跑被 `HTTP 429`（免费档速率限制）打断，过程与一个已修的 `--only` bug 记在 [`eval/results/b2-live-blocked.json`](eval/results/b2-live-blocked.json)，所以这一条验收线只算完成一半；S11 交付了仓库符号地图与 `.mcc/` 工作记忆（见 §4.8）：两臂只差 `--no-repo-map` 一个开关，7 条机制判据（地图**换掉**目录树、地图计入 `context_peak`、零额外 LLM 调用、两臂 system 不同）离线全绿；真实模型那半条跑完了，结论是 **B3 未达成** —— token 侧 ✓（`context_peak` p95 涨幅 +5.4%，线是 ≤15%），轮数侧 ✗（`steps_to_success` 中位 6.0 → 6.0，降幅 0%，线是 ≥20%），通过数还从 14/18 掉到 13/18。这是一次有效的证伪而不是无效实验（脚本先证明了配对成立），20% 这条线保持原样，重测计划记在 SPEC §7.3-5，全部数字见 [`eval/results/b3-repomap-ab.json`](eval/results/b3-repomap-ab.json)。4 个 demo 仍在真实端点上跑通（`--engine fake` 5/5、`--engine live` 4/4），全部数字由脚本从 trace 自动生成。路线图见 [`SPEC-v2.md`](SPEC-v2.md)。
 
 ---
 
@@ -267,7 +267,11 @@ mcc eval --tasks eval/tasks-b2 --repeats 1 --context-budget 12000 --context-hard
 PYTHONPATH="src;demos" python -X utf8 scripts/b2_compact_ab.py # 三臂 + 12 条判据 → eval/results/b2-compact-ab.json
 ```
 
-实测（`lc-rollup-api`：`ledger/` 八模块 194,356 字符，逐字抄签名再写汇总层）：关阶梯第 5 轮 `est=31,287` 越 `l3_refuse`（阈值 30,400）判 `context_overflow`；开阶梯 19 轮全绿、14 次压缩、0 次因配对放弃、0 个配对 400。这条死因不是靠人转述的 —— `context_refuse` 记录自带 `line / threshold_tokens / est_tokens / ladder_enabled`，因为 `turn_start` 每轮只在请求前采样一次，光看 est 序列会把"预算杀掉的会话"读成"模型自己停了"。
+实测（`lc-rollup-api`：`ledger/` 八模块 194,356 字符，逐字抄签名再写汇总层；数字是 S11 之后重跑的）：关阶梯第 5 轮 `est=32,609` 越 `l3_refuse`（阈值 30,400）判 `context_overflow`；开阶梯 19 轮全绿、14 次压缩、0 次因配对放弃、0 个配对 400。这条死因不是靠人转述的 —— `context_refuse` 记录自带 `line / threshold_tokens / est_tokens / ladder_enabled`，因为 `turn_start` 每轮只在请求前采样一次，光看 est 序列会把"预算杀掉的会话"读成"模型自己停了"。
+
+一个后来才发现的耦合：system 里换上符号地图，把这几格数字都推动了，而且方向不一致 —— off 臂更早死（越线 est 31,287 → 32,609），on 臂峰值反而降了（26,278 → 21,633，阶梯提前动手），代价是 L2 的摘要开销从 3,900 涨到 5,850 tokens。12 条判据两种配置下都全绿，结论没变，但"地图挤占上下文预算"这件事第一次有了数值形状。
+
+**live 那一半（真实端点 5 次、成功率 ≥60%）今天签不了字**：试跑撞上 `HTTP 429 您已达到免费用户的 API 速率限制`，42 次运行里 28 次终止于 `llm_failure` —— 分母是速率限制打出来的，不是阶梯打出来的，所以它既不算达成也不算证伪。这一趟的净收益有两条：意外跑到的 30 次真端点压缩里 **0 次因配对放弃、0 个配对 400**（旁证，不替 live 臂签字），以及抓到一个会把 1 题探针放大成 17 题的 bug（`mcc eval` 在 `--engine live` 下用 `supports_live` 全集覆盖了 `--only`，已修 + 三条回归测试）。过程与重跑命令记在 `eval/results/b2-live-blocked.json` 与 SPEC §3.3.3。
 
 ### 4.8 仓库符号地图与工作记忆（`memory/`，接手陌生仓库）
 
@@ -516,7 +520,7 @@ live 那次（`demos/traces/red-tests.live.jsonl`，6 轮 13 次调用）的路�
 ## 8. 测试
 
 ```bash
-python -m pytest -q                # 477 passed
+python -m pytest -q                # 480 passed
 python -m pytest tests/test_loop_with_fake_llm.py -q
 python -m pytest tests/test_eval_runner.py tests/test_eval_cli.py -q   # 评测层（不联网）
 python scripts/b4_label_check.py   # 失败模式标签的人工核对，退出码 0 才算过
@@ -537,7 +541,7 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | `test_eval_metrics.py`（22） | 报表 25 个键逐个重算（`steps_to_success_median`、`wasted_output_ratio`、p95 都手算对一遍）、键名集合快照与 SPEC §3.2 同步、Wilson 区间手算值、`per_tag` 里结构性失败不许被抹平、空批 |
 | `test_eval_regression.py`（21） | 基线对比四条：考卷变了**只拒绝对比不给 Δ**、逐题翻红才算 blocker、McNemar 精确二项的手算值、`must-fail` 判绿出"判据告警"、"没做对比 ≠ 没有差异" |
 | `test_eval_judge.py`（19） | 十步判据逐条独立验：作弊判据排第一、白名单内外口径分开、`probe` 与 `verify_cmd` 只认退出码（打印 SUCCESS 不算过）、只读题碰盘即 fail、8 种终止原因参数化全覆盖 |
-| `test_eval_cli.py`（19） | `mcc eval` 退出码三档各有真走到的用例、fake 引擎不碰 `.env`、基线按哈希自动匹配、哈希不符时拒绝开跑与 `--force` 照跑仍标"无法对比"、`must-fail` 与 `negative` 在终端上的分工 |
+| `test_eval_cli.py`（22） | `mcc eval` 退出码三档各有真走到的用例、fake 引擎不碰 `.env`、基线按哈希自动匹配、哈希不符时拒绝开跑与 `--force` 照跑仍标"无法对比"、`must-fail` 与 `negative` 在终端上的分工、**live 批次里 `--only` 不许被 `supports_live` 默认覆盖**（点名点到负样本时终端先警告再花钱） |
 | `test_eval_taskset.py`（17） | 题集契约：未知字段/无判据/驱动名不存在一律拒绝加载、**题面不许泄漏答案**（gold 与 probe 都不许出现在 instruction 里）、只读题必须有答复关键字、`edit/write` 剧本必须真跑测试、`lint_task` 认送分题 |
 | `test_eval_runner.py`（15） | gold patch 真把用例翻绿（错 patch 判红）、篡改考卷被 `protected` 抓、工作副本隔离且基线树跑一百次不动、manifest 逐条落盘 / 续跑不重跑 / 旧哈希记录作废并提示、批次预算到点即停、装配失败只崩这一题不崩整批 |
 | `test_openai_compat.py`（19） | 报文形状（tools 声明、tool_result 配对顺序与 name）、arguments 字符串解析、可重试状态码与传输错误、4xx 不重试、usage 归一化、`LLMClient` 协议一致 |
@@ -562,7 +566,7 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 ## 9. 已知局限（诚实清单）
 
 - **A1 要求"非本项目真实仓库"，这里用的是仓库内 vendored fixture。** 拉取外部开源仓库的网络操作被本机权限策略拦下，于是改成手写陌生仓库。它证明了"基线全绿 + 一句话描述 + 无 traceback 定位"，但没证明跨语言、跨规模。真实 OSS 仓库的 5000 文件规模只会压垮仓库地图和上下文预算 —— 本仓库 142 个可见 `.py`（约为那个规模的 3%）冷建地图就要 0.83 秒，负载下最高 1.38 秒。
-- **压缩只到 L2，且它的收益只在 fake 引擎上量化过。** L1 省略工具输出、L2 结构化摘要都已上线并跑通 B2 的 A/B（§4.7），但"压缩后 agent 有没有静默变笨"这件事的真实分布要靠 live 臂：`scripts/b2_compact_ab.py --live`（真实端点各 5 次、成功率 ≥60%）**尚未执行**，所以 B2 只算完成一半。另外 `write_file` 的 content 进的是 assistant 消息，L1 碰不到它 —— 写得很长的会话只能靠 L2 那次付费调用救。
+- **压缩只到 L2，且它的收益只在 fake 引擎上量化过。** L1 省略工具输出、L2 结构化摘要都已上线并跑通 B2 的 A/B（§4.7），但"压缩后 agent 有没有静默变笨"这件事的真实分布要靠 live 臂：`scripts/b2_compact_ab.py --live`（真实端点 5 次、成功率 ≥60%）**跑过但没跑出结论** —— 端点回 `HTTP 429`（免费档速率限制），42 次运行里 28 次 `llm_failure`，所以 B2 只算完成一半，等额度窗口恢复重跑（`eval/results/b2-live-blocked.json` 记了过程与新命令的预估开销）。另外 `write_file` 的 content 进的是 assistant 消息，L1 碰不到它 —— 写得很长的会话只能靠 L2 那次付费调用救。
 - **符号地图只认 Python、只认 `ast` 能看出来的东西。** 装饰器背后的动态注册、`__all__` 之外的字符串路由、yaml/toml 里的符号都看不见；`REPO_MAP=0` 时退回的仍是那棵固定 30 行、广度优先的目录树，深目录尾部一样要靠模型自己 `find_files`。跨进程缓存命中实测 27.9~99.4ms（最后一次 36.8ms），没达到 SPEC §6.2 的 ≤5ms 那条线 —— 同实例的进程内 memo 是 4.0~9.4ms，那条达标（原因与口径见 `eval/results/b3-repomap-ab.json` 的 `amendments`）。
 - **live 数字不可复现。** 同一任务重跑轮数会漂移；证据文件因此各自记录自己那一次，不做"平均"。
 - **端点行为依赖。** `tools` 字段偶发被吞，所以工具清单在系统提示里又列了一遍。
@@ -640,7 +644,7 @@ mini-claude-code/
 │   ├── results/                验收线的证据文件（b2/b3 的 A/B 判据、live 冒烟报表；数字不可复现所以入库）
 │   └── .work/                  工作副本与逐条记录（忽略，报表与基线才提交）
 ├── scripts/                    probe_caps / probe_window / b4_label_check / b2_compact_ab / b3_repomap_ab 等证据生成器
-├── tests/                      477 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照）
+├── tests/                      480 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照）
 └── demos/
     ├── run_demo.py             隔离副本 → 跑真 Agent → 独立判据 → 生成证据
     ├── fake_scripts.py         FakeLLM 轨迹（脚本化，不报自述数字）

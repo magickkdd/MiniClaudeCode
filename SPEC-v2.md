@@ -614,13 +614,29 @@ L2 的消息删除算法**只能整组删**：一个 assistant 的 `tool_calls` 
 
 | 臂 | 参数 | 结果 | 轮数 | 峰值 est | 压缩 | 关键数 |
 |---|---|---|---|---|---|---|
-| off | `--no-compact` | **fail / context_overflow** | 4（第 5 轮请求前拒载） | 23,871 采样 / **31,287 越线** | 0 次 | `line=l3_refuse, threshold=30,400, ladder_enabled=false` |
-| on | 默认（32k 预算） | **pass / completed** | 19 | 26,278 | 14 次（L1 12 · L2 2） | L1 省略 8 块、L2 摘要 28 块、省 95,586 est、摘要开销 3,900 tokens、**0 次因配对放弃**、15 次 id 改名 |
-| tight | `--context-budget 12000 --context-hard-limit 15000` | fail / context_overflow | 2 | 9,058 | 1 次 | 负向对照：窗口真不够时阶梯照样救不回来 |
+| off | `--no-compact` | **fail / context_overflow** | 4（第 5 轮请求前拒载） | 25,193 采样 / **32,609 越线** | 0 次 | `line=l3_refuse, threshold=30,400, ladder_enabled=false` |
+| on | 默认（32k 预算） | **pass / completed** | 19 | 21,633 | 14 次（L1 12 · L2 2） | L1 省略 8 块、L2 摘要 28 块、省 95,541 est、摘要开销 5,850 tokens、**0 次因配对放弃**、15 次 id 改名 |
+| tight | `--context-budget 12000 --context-hard-limit 15000` | fail / context_overflow | 2 | 10,380 | 2 次 | 负向对照：窗口真不够时阶梯照样救不回来 |
 
 摘要清单里存活 6 个汇总文件名（`reports/part_01..06_summary.py`），判据取 ≥6/8 —— 阶梯压掉的是最老的轮组，最后两份还没被摘要接管。
 `test_compact.py + test_pairing.py` 收集 51 项（SPEC 要求 ≥8）全绿。
-**live 侧（真实端点各 5 次、压缩后成功率 ≥60%）尚未跑**：`--live` 已实现但本批证据只有 fake 臂，B2 的这一半按 §0.3 E1 的纪律标成未达成，不并入"已达成"。
+
+**上表是 S11 之后的重跑**（`eval/results/b2-compact-ab.json` 随代码一起再生，不留旧数）。两级的数字都被符号地图推动着变了，方向不一致，而这正是值得记下来的耦合：system 里多了地图，off 臂的越线 est 从 31,287 抬到 **32,609**（更早死），on 臂的峰值却从 26,278 掉到 **21,633**（阶梯提前动手、少留了几轮原始历史），代价是 L2 的摘要开销从 3,900 涨到 **5,850 tokens**、tight 臂的压缩次数从 1 涨到 2。12 条判据在两种配置下都全绿 —— 结论没变，"地图挤占了上下文预算"这件事第一次有了数值形状。
+
+**live 侧（真实端点 5 次、成功率 ≥60%）没有结论，原因是端点额度而不是代码**：2026-09-22 实跑被 `HTTP 429 您已达到免费用户的 API 速率限制` 打断，42 次运行里 28 次终止于 `llm_failure`。这一趟顺手抓到一个花钱的 bug 并修掉了（`--only` 在 live 分支被 `supports_live` 全集覆盖，探针从 1 题变 17 题，见 §3.3.3）。意外收获是真的：跑到完成的会话里压缩共触发 30 次，**因配对放弃 0 次、配对导致的 400 共 0 次** —— 但它是旁证，不替 live 臂签字。B2 的这一半仍按 §0.3 E1 的纪律标未达成。
+
+### 3.3.3 live 探针的 as-built（`eval/results/b2-live-blocked.json`）
+
+| 事实 | 数 |
+|---|---|
+| 计划范围 | `--only gf-calculator`，1 题 × 5 次 |
+| 实际范围 | 17 题（`_select()` 在 `engine==live` 分支把 `--only` 算出的 ids 整个换成 `supports_live` 全集） |
+| 花费 | 357,295 tokens，42 次运行，`llm_failure` 28 / `completed` 12 / `context_overflow` 2 |
+| 端点回执 | 19 条 `error` 记录，全部 `HTTP 429`，每条重试 3 次后放弃 |
+| 修复 | 默认跳过只在没人点名时生效；点名点到 `supports_live=false` 的题时终端先警告。回归三条在 `tests/test_eval_cli.py` |
+| 待办 | 额度窗口恢复后重跑 `--live --live-repeats 5`，此时 `--only` 真的只管 1 题（≈4.3 万 tokens 量级） |
+
+一条纪律被这次事故验证了：**跑批期间不能同时改代码，也不能同时留两个写同一 `--out` 的批次**。后台那次 `--live-repeats 5` 在工具报告"已完成"之后其实还活着，继续往同一个目录追加 manifest，并且会在收尾时把 B2 的证据文件重写成 429 的成绩 —— 中止它之后 `b2-compact-ab.json` 才是上面这份。
 
 ## 3.4 Memory — `memory/`（S11，8h · **B3**）
 
@@ -1071,7 +1087,7 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 |---|---|---:|---|
 | **8** ✅ | §3.1 度量修补 + trace v2 + schema 契约 + 失败分类学 + `mcc trace` | 8h | E1/E2/E3 关闭；`test_metrics_have_producers` 绿；对 3 条真实失败轨迹人工核对模式标签（B4 的前半）→ **实到 16 条全核对、`scripts/b4_label_check.py` 退出码 0** |
 | **9** ✅ | §3.2 `eval/`：从 `run_demo.py` 抽 `judge/Check/prepare` → `eval/`；任务集 24 个；runner + 指标 + 断点续跑 + 批次预算 | 14h | 24 任务 fake 引擎全跑通（秒级）+ 6 任务 live 冒烟；一份 `eval/baselines/` 基线文件入库（**B1**）→ **实到：fake 72 次运行 `pass@1=20/24`，12 个 fail 全是 `must-fail` 负样本，退出码 0，p50 930ms / p95 6,880ms；基线 `eval/baselines/fake-0935fa95ca49.json` 已入库；live 冒烟 4/6（证据见 §3.2 末尾与 `eval/results/`）；评测层 113 项测试（全仓 382）** |
-| **10** ◐ | §3.3 压缩阶梯 L1+L2 + `assert_pairing` | 10h | **B2**：超预算任务 0 个 400、压缩后成功率 ≥60%；8 项压缩测试绿 · **实到（2026-09-22，`eval/results/b2-compact-ab.json`，12 条判据全绿）**：off 臂第 5 轮 31,287 est 越 `l3_refuse`（阈值 30,400、`ladder_enabled=false`）→ fail/context_overflow；on 臂 19 轮 pass、14 次压缩（L1 12 · L2 2）、省 95,586 est、摘要开销 3,900 tokens、**0 次因配对放弃、0 个配对 400**、摘要清单存活 6/8 个已改文件名；压缩+配对测试 **51 项**绿（要求 ≥8）。**未完成的一半**：真实端点各 5 次的成功率 ≥60% 与"端点侧 0 个 400"要靠 `scripts/b2_compact_ab.py --live`（`--live` 已实现，尚未跑） —— fake 引擎不发 HTTP，它只能证明配对*结构*合法 |
+| **10** ◐ | §3.3 压缩阶梯 L1+L2 + `assert_pairing` | 10h | **B2**：超预算任务 0 个 400、压缩后成功率 ≥60%；8 项压缩测试绿 · **实到（2026-09-22 于 S11 之后重跑，`eval/results/b2-compact-ab.json`，12 条判据全绿）**：off 臂第 5 轮 32,609 est 越 `l3_refuse`（阈值 30,400、`ladder_enabled=false`）→ fail/context_overflow；on 臂 19 轮 pass、14 次压缩（L1 12 · L2 2）、省 95,541 est、摘要开销 5,850 tokens、**0 次因配对放弃、0 个配对 400**、摘要清单存活 6/8 个已改文件名；压缩+配对测试 **51 项**绿（要求 ≥8）。system 里加了符号地图之后 off 臂更早死、on 臂峰值反而从 26,278 降到 21,633，这是 §3.3.2 记下的耦合。**未完成的一半**：真实端点 5 次的成功率 ≥60% —— 2026-09-22 试跑被 `HTTP 429`（免费档速率限制）打断，42 次运行里 28 次 `llm_failure`，无结论；同一趟修掉了"`--only` 在 live 分支被 `supports_live` 全集覆盖"这个把 1 题探针放大成 17 题的 bug（§3.3.3、`eval/results/b2-live-blocked.json`）。旁证：真端点上压缩 30 次、因配对放弃 0、配对导致的 400 共 0 |
 | **11** ◐ | §3.4 `RepoMap` + `MemoryStore` + `.mcc/` | 8h | **B3** 的 A/B 报告（有/无地图）产出真实 delta；地图开销在 §6.2 预算内 → **实到（2026-09-22，`eval/results/b3-repomap-ab.json`）**：36 次真模型运行（6 题 × 3 × 2 臂，1,260,511 tokens），两臂只差 `--no-repo-map`；机制层 **7/7 全绿**（地图换掉目录树、净增 +783~+1,377 字符/题、首轮 est +235~+406 计入 `context_peak`、off 臂 0 条 `repo_map` 事件、两臂 system 逐题哈希不同、`llm_request` 33/33 相等、6 题模块未列出 0 项）；因果层 **未达成** —— `context_peak` p95 **+5.4%** ✓ 而 `steps_to_success` 中位 **6.0→6.0（降 0%）** ✗，防幸存者那条也 ✗（通过 14→13）。**这是一次有效的证伪**：地图便宜到几乎免费，但没把 A1 变快，20% 这条线不被本模型 × 本题集支持，线保持原样（见 §3.4.2）。§6.2 的账另核：每轮开销 0.0003ms ✓、进程内 memo 4.0~9.4ms 半数达标、跨进程缓存命中 27.9~99.4ms ✗（指纹纪律所致）、冷建 557~1,381ms 总中位 829ms ✗（见 §6.2.1） |
 
 **Tier 1 结束时该项目就已经回答了 JD 第 7、8、13 三项**，且带着别人抄不走的证据：一条完整的"改动 → 配对回归 → 数字差值"链路。

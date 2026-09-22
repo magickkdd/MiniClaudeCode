@@ -1,0 +1,82 @@
+{
+  "accidental_positive_signal": {
+    "abandoned_by_pairing": 0,
+    "caveat": "fake 臂那 12 条判据仍是 B2 目前的全部结论；这条是旁证，不能替 live 臂签字。",
+    "claim": "真实端点上压缩没有压坏 tool_calls/tool 配对（这条不额外花额度，但只覆盖跑到的那些会话）",
+    "compactions": 30,
+    "pairing_400_errors": 0,
+    "sessions_that_ran_to_completion": 12
+  },
+  "actual_scope": "42 次运行、29 份 trace —— 原因见 bug_found_and_fixed",
+  "bug_found_and_fixed": {
+    "cost": "一次本该「1 题 × 1 次」的探针花掉 357,295 tokens（含被中止的那次后台批次），并把账户推到 429。",
+    "fix": "默认只在没人点名时生效；点到 supports_live=false 的题时终端先警告再花钱。",
+    "id": "live 批次里 --only 被 supports_live 默认覆盖",
+    "symptom": "argv 写着 --only gf-calculator，实际跑遍了 supports_live 的 17 道题：函数先按 --only 算出 ids，再在 engine==live 分支把 ids 整个换成全集。",
+    "tests": [
+      "test_explicit_only_survives_the_live_default",
+      "test_an_unnamed_live_batch_still_skips_the_negative_samples",
+      "test_a_named_negative_sample_says_so_before_it_costs_money"
+    ],
+    "where": "src/miniclaude/cli/eval_cmd.py · _select()"
+  },
+  "command": "PYTHONPATH=\"src;demos\" python -X utf8 scripts/b2_compact_ab.py --live --live-repeats 5",
+  "derived_from": {
+    "evidence_still_holding_the_fake_verdict": "eval/results/b2-compact-ab.json",
+    "manifest": "eval/.work/b2-ab/live/manifest.jsonl",
+    "note": "下面这些路径是 gitignored 的工作副本，本文件是把它们抄进版本库的那一步。",
+    "traces": "eval/.work/b2-ab/live/traces/*.jsonl"
+  },
+  "honest_line": "线保持原样：B2 仍然只算完成一半。这份记录回答的是「今天为什么签不了字」，不是「换一个今天能过的口径」。额度恢复后重跑上面那条命令，本文件应被删除或由新结果改写。",
+  "how_to_finish": {
+    "command": "PYTHONPATH=\"src;demos\" python -X utf8 scripts/b2_compact_ab.py --live --live-repeats 5",
+    "expected_cost": "修复后 --only 生效：1 题 × 5 次。按本次每次运行平均 8,507 tokens 估 ≈ 42,535 tokens",
+    "precondition": "等额度窗口恢复（429 是速率限制，不是配置错误）",
+    "then": "eval/results/b2-compact-ab.json 的 clauses 会自动补上 live_success_rate_ge_60 与 live_zero_pairing_400 两条，SPEC §7.1 行 10 才从 ◐ 变 ✅ 或 ❌。"
+  },
+  "intended_scope": "只有 gf-calculator 一道题（run_live 里的 --only）",
+  "live_arm": {
+    "abandoned_by_pairing": 0,
+    "argv": [
+      "--tasks",
+      "eval/tasks",
+      "--only",
+      "gf-calculator",
+      "--engine",
+      "live",
+      "--repeats",
+      "1",
+      "--context-budget",
+      "6000",
+      "--out",
+      "eval/.work/b2-ab/live"
+    ],
+    "compactions": 30,
+    "pairing_400_errors": 0,
+    "pass_at_k": "10/42",
+    "runs_in_manifest": 42,
+    "success_rate": 0.238,
+    "termination_counts": {
+      "completed": 12,
+      "context_overflow": 2,
+      "llm_failure": 28
+    },
+    "tokens_spent": 357295,
+    "trace_files": 29
+  },
+  "measurement_note": "两次尝试（一次后台 --live-repeats 5 被中止、一次前台 --live-repeats 1）写进了同一个 --out 目录，manifest 逐条累积、trace 文件按同名覆盖，所以下面 live_arm 是这两次的混合快照，不是任何单一批次。中断后台批次是必须的：它会在收尾时把 B2 的证据文件重写成 429 的成绩。",
+  "recorded_at": "2026-09-22",
+  "root_cause": {
+    "endpoint_says": "HTTP 429：您已达到免费用户的 API 速率限制，升级 Token Plan 才解锁更高限额。error 记录全是这一类，每条重试 3 次后放弃。",
+    "not_measured": "B2 的 live 判据（成功率 ≥60%）这次没有结论 —— 分母是 429 打出来的，不是阶梯打出来的。",
+    "why_the_batch_died": "42 次运行里 28 次终止于 llm_failure：额度打满之后每一次真实调用都返回 429，与压缩阶梯无关。"
+  },
+  "schema": 1,
+  "spec": "SPEC v2 §3.3 / §7.1 行 10 · 验收线 B2 的 live 半条（本次没有判定）",
+  "status": "blocked-on-endpoint-rate-limit",
+  "tokens_per_run_average": 8507,
+  "trace_error_http_codes": {
+    "429": 19
+  },
+  "trace_error_records": 19
+}

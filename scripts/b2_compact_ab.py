@@ -328,7 +328,8 @@ def main() -> int:
     print()
     for clause in payload["clauses"]:
         print(f"{'✓' if clause['ok'] else '✗'} {clause['id']:32s} {clause['detail']}")
-    print(f"\nB2 {'达成' if payload['pass'] else '未达成'} · 证据 {RESULT.relative_to(ROOT)}")
+    half = "" if "live" in payload else " 的 fake 侧（live 半条未跑，见 eval/results/b2-live-blocked.json）"
+    print(f"\nB2{half} {'达成' if payload['pass'] else '未达成'} · 证据 {RESULT.relative_to(ROOT)}")
     if "live" in payload:
         print(f"live：{payload['live']['pass_at_k']} · tokens {payload['live']['tokens_spent']}")
     return 0 if payload["pass"] else 1

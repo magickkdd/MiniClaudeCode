@@ -340,3 +340,43 @@ def test_a_tuned_batch_cannot_be_saved_as_the_baseline(repo: Path, capsys: pytes
     assert "评测开始" not in out, "拒绝要发生在花钱之前"
     written = list((repo / "baselines").glob("*.json")) if (repo / "baselines").exists() else []
     assert written == [], f"证据目录里不该出现被拧过阶梯的批次：{written}"
+
+
+# ---------------------------------------------------------------- live 选题：--only 说了算
+
+
+def _tasks_with_a_live_only_and_a_negative(repo: Path) -> TaskSet:
+    write_task(repo, task_json())
+    write_task(repo, task_json(id="toy-negative", tags=["negative"], supports_live=False))
+    return TaskSet.load(repo / "eval" / "tasks")
+
+
+def test_explicit_only_survives_the_live_default(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """`--only` 在 live 下必须还是 `--only`。
+
+    它被"live 只跑 supports_live"那句默认覆盖过一次：脚本里写着 `--only gf-calculator`，
+    实际把 17 道题全跑了一遍。默认是给"没点名"的人省额度的，不是来推翻点名的。
+    """
+    tasks = _tasks_with_a_live_only_and_a_negative(repo)
+    args = eval_cmd.build_parser().parse_args(["--only", "toy-fix"])
+    picked = eval_cmd._select(args, tasks, engine="live")
+    assert [task.id for task in picked] == ["toy-fix"]
+    assert "跳过" not in capsys.readouterr().out, "点名了就不该再播报默认跳过"
+
+
+def test_an_unnamed_live_batch_still_skips_the_negative_samples(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """没点名时默认照旧：负样本靠 fake 复现，不花额度。"""
+    tasks = _tasks_with_a_live_only_and_a_negative(repo)
+    args = eval_cmd.build_parser().parse_args([])
+    picked = eval_cmd._select(args, tasks, engine="live")
+    assert [task.id for task in picked] == ["toy-fix"]
+    assert "跳过 1 道 supports_live=false" in capsys.readouterr().out
+
+
+def test_a_named_negative_sample_says_so_before_it_costs_money(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """点名要点到负样本上也可以，但终端得先说清楚：这一道是真花额度的。"""
+    tasks = _tasks_with_a_live_only_and_a_negative(repo)
+    args = eval_cmd.build_parser().parse_args(["--only", "toy-negative"])
+    picked = eval_cmd._select(args, tasks, engine="live")
+    assert [task.id for task in picked] == ["toy-negative"]
+    assert "supports_live=false，仍按点名跑在真实端点上" in capsys.readouterr().out

@@ -302,19 +302,26 @@ def _select(args: argparse.Namespace, tasks: TaskSet, *, engine: str) -> TaskSet
     """把 `--only` / `--tag` / `--smoke` / live 自动跳过合成一个题集。
 
     live 批次默认只跑 `supports_live` 的题：负样本靠 fake 就能稳定复现，用真模型
-    重跑它们既不改变结论又要花钱。
+    重跑它们既不改变结论又要花钱。但这条默认**只在用户没有自己点名时生效** ——
+    显式 `--only` 被它覆盖过一次，代价是脚本里写着"只跑 gf-calculator"、实际把
+    17 道题全跑了一遍（B2 的 live 臂首跑就是这么撞上速率限制的）。
     """
     ids = [part.strip() for part in args.only.split(",") if part.strip()]
     tags = [part.strip() for part in args.tag.split(",") if part.strip()]
     if args.smoke is not None:
         ids = [task.id for task in tasks if task.supports_live][: max(1, args.smoke)]
-    elif engine == "live":
+    elif engine == "live" and not ids and not tags:
         skipped = [task.id for task in tasks if not task.supports_live]
         if skipped:
             print(f"跳过 {len(skipped)} 道 supports_live=false 的题（负样本靠 fake 复现，不花额度）")
         ids = [task.id for task in tasks if task.supports_live]
     if ids or tags:
-        return tasks.filtered(ids=ids, tags=tags)
+        selected = tasks.filtered(ids=ids, tags=tags)
+        if engine == "live":
+            paying = [task.id for task in selected if not task.supports_live]
+            if paying:
+                print(f"注意：这 {len(paying)} 道题 supports_live=false，仍按点名跑在真实端点上：{' '.join(paying)}")
+        return selected
     return tasks
 
 

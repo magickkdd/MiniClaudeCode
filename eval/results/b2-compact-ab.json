@@ -22,7 +22,7 @@
       "compactions": 0,
       "context_refusals": [
         {
-          "est_tokens": 31287,
+          "est_tokens": 32609,
           "ladder_enabled": false,
           "line": "l3_refuse",
           "threshold_tokens": 30400,
@@ -35,7 +35,7 @@
       "exit_code": 1,
       "id_repairs": 3,
       "pairing_400_errors": 0,
-      "peak_est_tokens": 23871,
+      "peak_est_tokens": 25193,
       "saved_est_tokens": 0,
       "summarize_attempts": 0,
       "summary_files_kept": [],
@@ -61,14 +61,14 @@
       "compactions": 14,
       "context_refusals": [],
       "dropped_blocks": 28,
-      "elide_attempts": 12,
+      "elide_attempts": 11,
       "elided_blocks": 8,
       "exit_code": 0,
       "id_repairs": 15,
       "pairing_400_errors": 0,
-      "peak_est_tokens": 26278,
-      "saved_est_tokens": 95586,
-      "summarize_attempts": 2,
+      "peak_est_tokens": 21633,
+      "saved_est_tokens": 95541,
+      "summarize_attempts": 3,
       "summary_files_kept": [
         "reports/part_01_summary.py",
         "reports/part_02_summary.py",
@@ -77,9 +77,9 @@
         "reports/part_05_summary.py",
         "reports/part_06_summary.py"
       ],
-      "summary_tokens": 3900,
+      "summary_tokens": 5850,
       "termination": "completed",
-      "tokens": 3900,
+      "tokens": 5850,
       "turns": 19,
       "verdict": "pass"
     },
@@ -105,10 +105,10 @@
         "任务正常收尾（completed）",
         "改动落在代码里（≥8 个文件）"
       ],
-      "compactions": 1,
+      "compactions": 2,
       "context_refusals": [
         {
-          "est_tokens": 16470,
+          "est_tokens": 17792,
           "ladder_enabled": true,
           "line": "hard_fuse",
           "threshold_tokens": 13500,
@@ -121,9 +121,9 @@
       "exit_code": 1,
       "id_repairs": 1,
       "pairing_400_errors": 0,
-      "peak_est_tokens": 9058,
+      "peak_est_tokens": 10380,
       "saved_est_tokens": 0,
-      "summarize_attempts": 0,
+      "summarize_attempts": 1,
       "summary_files_kept": [],
       "summary_tokens": 0,
       "termination": "context_overflow",
@@ -141,7 +141,7 @@
     },
     {
       "claim": "对照组的死因在 trace 里自带归因：越的是 L3 拒载线、阶梯当时没开",
-      "detail": "off 臂 context_refuse [{'line': 'l3_refuse', 'threshold_tokens': 30400, 'est_tokens': 31287, 'ladder_enabled': False, 'turn': 5}]",
+      "detail": "off 臂 context_refuse [{'line': 'l3_refuse', 'threshold_tokens': 30400, 'est_tokens': 32609, 'ladder_enabled': False, 'turn': 5}]",
       "id": "off_arm_death_attributed",
       "ok": true
     },
@@ -159,7 +159,7 @@
     },
     {
       "claim": "L1 与 L2 各被真正触发过（只到 L1 就等于没测到摘要）",
-      "detail": "L1 省略 8 块 / L2 摘要 28 块（2 次），共省 95586 est tokens",
+      "detail": "L1 省略 8 块 / L2 摘要 28 块（3 次），共省 95541 est tokens",
       "id": "both_tiers_fired",
       "ok": true
     },
@@ -183,13 +183,13 @@
     },
     {
       "claim": "L2 的开销进了报表（压缩不是免费的）",
-      "detail": "summary_tokens=3900 · 全批 tokens=3900（剧本 usage 恒为 0）",
+      "detail": "summary_tokens=5850 · 全批 tokens=5850（剧本 usage 恒为 0）",
       "id": "l2_cost_is_charged",
       "ok": true
     },
     {
       "claim": "负向对照：窗口真不够时阶梯也救不回来，它不是万能药",
-      "detail": "tight 臂 verdict=fail termination=context_overflow，阶梯试了 1 次",
+      "detail": "tight 臂 verdict=fail termination=context_overflow，阶梯试了 2 次",
       "id": "tight_window_still_dies",
       "ok": true
     },
@@ -210,7 +210,7 @@
     "count": 51,
     "exit_code": 0,
     "output_tail": [
-      "51 passed in 0.20s"
+      "51 passed in 0.31s"
     ]
   },
   "engine": "fake",
