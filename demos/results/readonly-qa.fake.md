@@ -10,9 +10,11 @@
 | expected | 工作区哈希与基线一致（真没写盘）；答案指出 `divmod` 用错了换算常量并解释测试为何漏掉 |
 | actual | `completed` · 判定 PASS（3/3） |
 | turns / tokens | 3 轮 / 不适用（FakeLLM 不返回 usage） |
-| tool_calls | 4 次，其中 is_error 0 次（0%） |
+| tool_calls | 发起 4 次 · 执行 4 次，其中 is_error 0 次（0%） |
 | 工具序列 | find_files → search_text → read_file → read_file |
-| redundant / denied | 0 / 0 |
+| denied / repeated / stalled | 0 次被拒 · 0 次逐调用重复 · 0 轮整组重演 |
+| 失败模式 | — |
+| 上下文峰值 | 0 tokens |
 | 权限模式 | `readonly`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |
 | wall time | 0.0s |
 | trace | `demos/traces/readonly-qa.fake.jsonl` |
@@ -31,9 +33,9 @@
 ```text
 先看仓库形状，再定位实现。
 ✓ find_files  **/*.py  1ms
-✓ search_text format_duration  13ms
+✓ search_text format_duration  12ms
 ✓ read_file   duration/format.py  1ms
-✓ read_file   README.md  2ms
+✓ read_file   README.md  1ms
 **超过一天的输出是错的。**
 
 `duration/format.py:15` 里切「天」用的除数是 `SECONDS_PER_HOUR`：

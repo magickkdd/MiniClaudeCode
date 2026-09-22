@@ -64,7 +64,7 @@ def test_bug_hunt_premise_holds():
     code, counts, _ = rd.pytest_report(rd.FIXTURES / "bug-hunt")
     assert code == 0 and counts["failed"] == 0, "基线不再全绿，Demo 2 已失去意义"
     probe = "import sys; sys.path.insert(0, '.'); from duration import format_duration; print(format_duration(90000))"
-    exit_code, output = rd._run(rd.FIXTURES / "bug-hunt", [sys.executable, "-c", probe], timeout=60)
+    exit_code, output = rd.run_in(rd.FIXTURES / "bug-hunt", [sys.executable, "-c", probe], timeout=60)
     assert exit_code == 0 and output.strip().endswith("25d0h0m0s"), f"bug 不再复现：{output!r}"
 
 

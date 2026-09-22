@@ -10,11 +10,13 @@
 | expected | pytest 退出码 0；README 表格里的示例逐条兑现；用例总数比基线多（确实补了回归测试） |
 | actual | `completed` · 判定 PASS（4/4） |
 | turns / tokens | 7 轮 / 不适用（FakeLLM 不返回 usage） |
-| tool_calls | 7 次，其中 is_error 0 次（0%） |
+| tool_calls | 发起 7 次 · 执行 7 次，其中 is_error 0 次（0%） |
 | 工具序列 | write_todos → search_text → read_file → read_file → edit_file → write_file → run_tests |
-| redundant / denied | 0 / 0 |
+| denied / repeated / stalled | 0 次被拒 · 0 次逐调用重复 · 0 轮整组重演 |
+| 失败模式 | — |
+| 上下文峰值 | 0 tokens |
 | 权限模式 | `auto`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |
-| wall time | 1.0s |
+| wall time | 1.1s |
 | trace | `demos/traces/bug-hunt.fake.jsonl` |
 | 工作副本 | `demos/.work/bug-hunt`（判定就在这个目录跑） |
 
@@ -38,14 +40,14 @@
   [ ] 对照 README 表格确认期望输出
   [ ] 修复并补防回归测试
 先确认承诺的格式，再找实现落在哪个文件。
-✓ search_text def format_duration  10ms
-✓ read_file   README.md  1ms
+✓ search_text def format_duration  12ms
+✓ read_file   README.md  2ms
 ✓ read_file   duration/format.py  1ms
 根因找到：切「天」那次 divmod 用的是每小时的秒数，90000 秒因此被切成 25 段。改成 SECONDS_PER_DAY。
 ✓ edit_file   duration/format.py  1ms
 现有测试最远只到 3599 秒，所以这个 bug 一直是哑的。补上跨天的用例。
-✓ write_file  tests/test_format_days.py  1ms
-✓ run_tests     932ms
+✓ write_file  tests/test_format_days.py  2ms
+✓ run_tests     1.1s
 修好了，根因是单位换算用错常量：`duration/format.py` 里切「天」的那次 `divmod` 传的是 `SECONDS_PER_HOUR`（3600）而不是 `SECONDS_PER_DAY`（86400），于是 90000 秒变成 `25d0h0m0s`。
 
 - 改动 1 行：`duration/format.py`

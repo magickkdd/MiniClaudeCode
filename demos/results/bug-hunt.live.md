@@ -9,12 +9,14 @@
 | repo/baseline | `demos/fixtures/bug-hunt` · baseline `66e7e20db481`（13 个文件） |
 | expected | pytest 退出码 0；README 表格里的示例逐条兑现；用例总数比基线多（确实补了回归测试） |
 | actual | `completed` · 判定 PASS（4/4） |
-| turns / tokens | 6 轮 / 24,994 tokens |
-| tool_calls | 11 次，其中 is_error 3 次（27%） |
-| 工具序列 | read_file → read_file → read_file → find_files → read_file → read_file → read_file → edit_file → edit_file → run_tests → run_tests |
-| redundant / denied | 0 / 0 |
+| turns / tokens | 9 轮 / 52,017 tokens |
+| tool_calls | 20 次，其中 is_error 0 次（0%） |
+| 工具序列 | read_file → read_file → read_file → read_file → edit_file → edit_file → run_tests → run_tests → read_file → read_file → read_file → read_file → run_tests → bash → bash → read_file → bash → bash → bash → bash |
+| denied / repeated / stalled | 0 次被拒 · 0 次逐调用重复 · 0 轮整组重演 |
+| 失败模式 | — |
+| 上下文峰值 | 8,853 tokens |
 | 权限模式 | `auto`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |
-| wall time | 12.6s |
+| wall time | 59.8s |
 | trace | `demos/traces/bug-hunt.live.jsonl` |
 | 工作副本 | `demos/.work/bug-hunt`（判定就在这个目录跑） |
 
@@ -32,24 +34,52 @@
 ## 终端输出（原样）
 
 ```text
-✓ read_file   README.md  2ms
-✗ read_file   src/format.py  0ms
-✗ read_file   src/test_format.py  0ms
-✓ find_files  **/*.py  1ms
-✗ read_file   src/__init__.py  0ms
 ✓ read_file   duration/format.py  2ms
+✓ read_file   duration/__init__.py  2ms
 ✓ read_file   tests/test_format.py  2ms
-Bug 找到：第 15 行把天数算成 `divmod(total, SECONDS_PER_HOUR)` 应该用 `SECONDS_PER_DAY`，导致 90000 秒被算成 25 小时而非 1 天 1 小时。
-✓ edit_file   duration/format.py  1ms
+✓ read_file   README.md  2ms
+根因找到：第 15 行把 `divmod(total, SECONDS_PER_HOUR)` 当成"除以天"来算 days，应该是 `SECONDS_PER_DAY`（86400），导致 90000 // 3600 = 25。
+
+修 bug，补回归测试，跑测试。
+✓ edit_file   duration/format.py  2ms
 ✓ edit_file   tests/test_format.py  1ms
-✓ run_tests   tests/test_format.py  930ms
-✓ run_tests     1.1s
-修好了。根因是 `duration/format.py` 第 15 行把 `divmod(total, SECONDS_PER_HOUR)` 误写成了按小时取余，导致天数被当作剩余小时计算；改为 `SECONDS_PER_DAY` 后 90000 秒正确输出 `1d1h0m0s`。同时在 `tests/test_format.py` 补了 `test_over_one_day`（覆盖 90000 和 90061 两个用例），全量 22 个测试通过。
+✓ run_tests   tests/  1.1s
+测试计数为 0，可能路径未包含 `duration/`，再跑一次全量。
+✓ run_tests   extra_args=['-q']  1.1s
+✓ read_file   conftest.py  1ms
+✓ read_file   tests/test_cli.py  1ms
+✓ read_file   tests/test_parse.py  1ms
+✓ read_file   tests/test_stopwatch.py  1ms
+✓ run_tests   extra_args=['-v', '--co']  919ms
+✓ bash        python -m pytest duration/format.py -v  666ms
+✓ bash        python -m pytest duration/format.py -v && echo "=== exit: $?"  706ms
+✓ read_file   tests/test_format.py  1ms
+✓ bash        ls duration/ tests/ && echo "---" && python -m pytest tests/test_fo…  740ms
+✓ bash        python -m pytest tests/test_format.py -v 2>&1; echo "exit=$?"  678ms
+✓ bash        python -m pytest tests/ -v 2>&1; echo "exit=$?"  886ms
+✓ bash        python -m pytest tests/ -v; echo "exit=$?"  840ms
+全部 22 项测试通过。
+
+**根因**：`duration/format.py` 第 15 行把 `divmod(total, SECONDS_PER_HOUR)` 错当成"算天数"，导致 `days = total // 3600`（90000 // 3600 = 25），`rest` 也被异常截断，后续小时/分钟全部错乱。
+
+**修复**：把除数从 `SECONDS_PER_HOUR` 改成 `SECONDS_PER_DAY`。
+
+**防回归测试**：新增 `tests/test_format.py::test_crosses_day_boundary`，用 90000 → `"1d1h0m0s"`、90061 → `"1d1h1m1s"` 两条断言覆盖跨天边界。
+
+**下一步**：可直接提交，或顺带补一个 `format_duration(86400) == "1d0h0m0s"` 的边界用例。
 ```
 
 ## 模型的最后一段话
 
-修好了。根因是 `duration/format.py` 第 15 行把 `divmod(total, SECONDS_PER_HOUR)` 误写成了按小时取余，导致天数被当作剩余小时计算；改为 `SECONDS_PER_DAY` 后 90000 秒正确输出 `1d1h0m0s`。同时在 `tests/test_format.py` 补了 `test_over_one_day`（覆盖 90000 和 90061 两个用例），全量 22 个测试通过。
+全部 22 项测试通过。
+
+**根因**：`duration/format.py` 第 15 行把 `divmod(total, SECONDS_PER_HOUR)` 错当成"算天数"，导致 `days = total // 3600`（90000 // 3600 = 25），`rest` 也被异常截断，后续小时/分钟全部错乱。
+
+**修复**：把除数从 `SECONDS_PER_HOUR` 改成 `SECONDS_PER_DAY`。
+
+**防回归测试**：新增 `tests/test_format.py::test_crosses_day_boundary`，用 90000 → `"1d1h0m0s"`、90061 → `"1d1h1m1s"` 两条断言覆盖跨天边界。
+
+**下一步**：可直接提交，或顺带补一个 `format_duration(86400) == "1d0h0m0s"` 的边界用例。
 
 ## diff：基线 → 运行后
 
@@ -65,14 +95,13 @@ Bug 找到：第 15 行把天数算成 `divmod(total, SECONDS_PER_HOUR)` 应该�
      minutes, secs = divmod(rest, SECONDS_PER_MINUTE)
 --- a/tests/test_format.py
 +++ b/tests/test_format.py
-@@ -15,4 +15,9 @@
- 
- 
-+def test_over_one_day():
+@@ -23,2 +23,8 @@
+     with pytest.raises(ValueError):
+         format_duration(bad)
++
++
++def test_crosses_day_boundary():
++    """防回归：90000 秒 = 1 天 + 1 小时，不应返回 25d"""
 +    assert format_duration(90000) == "1d1h0m0s"
 +    assert format_duration(90061) == "1d1h1m1s"
-+
-+
- def test_just_under_an_hour():
-     assert format_duration(3599) == "59m59s"
 ```

@@ -29,14 +29,20 @@ class TerminationReason(StrEnum):
 
 @dataclass
 class AgentState:
-    """一次 run() 的全部可观测计数。trace 和 CLI 摘要都从它派生。"""
+    """一次 run() 的全部可观测计数。trace 和 CLI 摘要都从它派生。
+
+    v2 起每个字段都必须有产地（`tests/test_trace_contract.py::test_metrics_have_producers`
+    盯着这件事）。v1 的 `redundant_calls` 是这个项目的第一个假数字：定义了、进 trace 了、
+    印在证据文件里，但从没被累加过。它被拆成下面两个口径不同、且都有写入点的字段。
+    """
 
     turn: int = 0
     usage: Usage = field(default_factory=Usage)
     context_peak_tokens: int = 0
     tool_calls: int = 0
     tool_errors: int = 0
-    redundant_calls: int = 0
+    repeated_calls: int = 0        # 逐调用：与前一次同名同参（SPEC v2 §3.1）
+    stalled_groups: int = 0        # 整组：命中停滞检测的轮次数，与上面那个不是同一个量
     denied_actions: int = 0
     rejections_in_a_row: int = 0
     status: Literal["running", "finished", "aborted"] = "running"
@@ -53,7 +59,8 @@ class AgentState:
             "context_peak_tokens": self.context_peak_tokens,
             "tool_calls": self.tool_calls,
             "tool_errors": self.tool_errors,
-            "redundant_calls": self.redundant_calls,
+            "repeated_calls": self.repeated_calls,
+            "stalled_groups": self.stalled_groups,
             "denied_actions": self.denied_actions,
             "status": self.status,
         }
@@ -67,6 +74,8 @@ class AgentResult:
     state: AgentState = field(default_factory=AgentState)
     todos: list[dict[str, Any]] = field(default_factory=list)
     trace_path: Path | None = None
+    failure_modes: list[str] = field(default_factory=list)
+    cost_est: float | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -75,7 +84,10 @@ class AgentResult:
 
     def summary_line(self) -> str:
         s = self.state
-        return (
-            f"{self.termination.value} · {s.turn} 轮 · {s.tool_calls} 次工具调用"
+        line = (
+            f"{self.termination.value} · {s.turn} 轮 · 发起 {s.tool_calls} 次调用"
             f"（{s.tool_errors} 次报错）· {s.usage.total:,} tokens"
         )
+        if self.failure_modes:
+            line += f" · {', '.join(self.failure_modes)}"
+        return line

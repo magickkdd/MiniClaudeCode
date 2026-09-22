@@ -26,15 +26,9 @@ from __future__ import annotations
 
 import argparse
 import difflib
-import hashlib
-import os
-import re
-import shutil
-import subprocess
 import sys
 import time
-from collections import Counter
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -49,6 +43,20 @@ from miniclaude.agent.state import AgentResult, TerminationReason  # noqa: E402
 from miniclaude.cli.main import build_session  # noqa: E402
 from miniclaude.cli.render import Renderer  # noqa: E402
 from miniclaude.config import Config  # noqa: E402
+from miniclaude.eval.contract import (  # noqa: E402
+    Check,
+    Context,
+    Outcome,
+    behavior,
+    file_count,
+    isolate,
+    pytest_report,
+    run_in,
+    subset_identical,
+    subset_only_added,
+    tracked_files as _files,
+    tree_hash,
+)
 from miniclaude.infra.trace import summarize  # noqa: E402
 from miniclaude.llm.openai_compat import OpenAICompatClient  # noqa: E402
 from miniclaude.messages import LLMResponse  # noqa: E402
@@ -56,187 +64,14 @@ from miniclaude.messages import LLMResponse  # noqa: E402
 import fake_scripts  # noqa: E402
 from fakes import FakeLLM  # noqa: E402
 
+# 判定原语住在 `miniclaude.eval.contract`：demo 与评测层必须共用同一份判据，否则
+# "同一件事两套口径"会以新的形式长回来（SPEC v2 §3.2 的第一条约束）。
+
 FIXTURES = DEMO_DIR / "fixtures"
 WORK = DEMO_DIR / ".work"
 TRACES = DEMO_DIR / "traces"
 RESULTS = DEMO_DIR / "results"
-NOISE = ("__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache")
-CHILD_ENV = {
-    **os.environ,
-    "PYTHONIOENCODING": "utf-8",
-    "PYTHONUTF8": "1",
-    "PYTHONDONTWRITEBYTECODE": "1",
-}
-_SUMMARY_RE = re.compile(r"(\d+) (passed|failed|errors?|error|skipped)\b")
 MAX_DIFF_LINES = 160
-
-
-# --------------------------------------------------------------- 判定原语
-
-
-@dataclass
-class Check:
-    label: str
-    ok: bool
-    detail: str = ""
-
-    def line(self) -> str:
-        mark = "x" if self.ok else " "
-        body = f"{self.label} —— {self.detail}" if self.detail else self.label
-        return f"- [{mark}] {body}"
-
-
-@dataclass
-class Outcome:
-    checks: list[Check] = field(default_factory=list)
-
-    @property
-    def ok(self) -> bool:
-        return bool(self.checks) and all(check.ok for check in self.checks)
-
-    @property
-    def passed(self) -> int:
-        return sum(1 for check in self.checks if check.ok)
-
-    def verdict(self) -> str:
-        return "PASS" if self.ok else "FAIL"
-
-    def lines(self) -> list[str]:
-        return [check.line() for check in self.checks]
-
-
-@dataclass
-class Context:
-    """判定能看到的一切。判定逻辑不许依赖模型的最后一段话。"""
-
-    engine: str
-    workdir: Path
-    baseline: Path
-    result: AgentResult
-    console: list[str]
-
-
-def _run(workdir: Path, argv: list[str], timeout: int) -> tuple[int, str]:
-    try:
-        done = subprocess.run(  # noqa: S603 - 判定脚本由我们自己拼，不含用户输入
-            argv,
-            cwd=str(workdir),
-            env=CHILD_ENV,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        return 124, f"{type(exc).__name__}: {exc}"
-    return done.returncode, ((done.stdout or "") + (done.stderr or "")).strip()
-
-
-def pytest_report(workdir: Path) -> tuple[int, dict[str, int], str]:
-    """在指定目录里独立跑一遍 pytest。
-
-    `--confcutdir .` 与显式的 `.` 都是必需的：本项目自己的 `pyproject.toml`
-    设了 `testpaths=["tests"]`，根目录还有一份 `conftest.py` 在忽略 demo
-    fixture。不加这两条，被判定方就会继承**判定方**的配置，收集到 0 个用例，
-    然后给出一个假的"退出码 0"。
-    """
-    code, output = _run(
-        workdir,
-        [
-            sys.executable, "-m", "pytest", "-q", "--no-header",
-            "-p", "no:cacheprovider", "--confcutdir", ".", ".",
-        ],
-        timeout=300,
-    )
-    counts = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
-    for num, raw in _SUMMARY_RE.findall(output):
-        key = raw if raw in counts else "errors" if raw.startswith("error") else ""
-        if key:
-            counts[key] = max(counts[key], int(num))
-    counts["collected"] = counts["passed"] + counts["failed"] + counts["errors"] + counts["skipped"]
-    if not counts["collected"]:
-        # 一个用例都没收集到绝不等于"通过"。这条兜底是为了让上面那种配置泄漏立刻暴露。
-        return 5, counts, output or "no tests were collected"
-    return code, counts, output
-
-
-def behavior(workdir: Path, probe: str, *, label: str = "函数行为符合任务承诺（不依赖模型自述）") -> Check:
-    """把"任务里承诺的行为"写成一段独立脚本去跑。
-
-    判定必须由**我们**跑代码得出。让模型自己说"我修好了"再抄进报告，
-    就是 SPEC §3.7 里那条"让模型自评成功率 = 评测造假"。
-    """
-    code, output = _run(workdir, [sys.executable, "-c", probe], timeout=120)
-    last = output.splitlines()[-1][:160] if output else f"退出码 {code}，无输出"
-    return Check(label=label, ok=code == 0, detail=last)
-
-
-def _files(root: Path) -> dict[str, bytes]:
-    if not root.is_dir():
-        return {}
-    out: dict[str, bytes] = {}
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or any(noise in path.parts for noise in NOISE) or path.suffix == ".pyc":
-            continue
-        out[path.relative_to(root).as_posix()] = path.read_bytes()
-    return out
-
-
-def tree_hash(root: Path) -> str:
-    digest = hashlib.sha256()
-    for name, payload in _files(root).items():
-        digest.update(name.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(hashlib.sha256(payload).digest())
-    return digest.hexdigest()[:12]
-
-
-def file_count(root: Path) -> int:
-    return len(_files(root))
-
-
-def changed_in_subset(subset: str, baseline: Path, workdir: Path) -> list[str]:
-    """基线里就存在的文件被改动/删除的清单 —— 用来抓"改测试让测试变绿"。"""
-    before = _files(baseline / subset)
-    after = _files(workdir / subset)
-    return sorted(name for name, payload in before.items() if after.get(name) != payload)
-
-
-def subset_identical(subset: str, baseline: Path, workdir: Path) -> Check:
-    """基线里就存在的文件必须逐字节不变。任务里明说"别动 tests/"的场合用它。"""
-    broken = changed_in_subset(subset, baseline, workdir)
-    detail = (
-        f"{subset}/ 有 {len(broken)} 个原有文件被改动：{', '.join(broken[:3])}"
-        if broken
-        else f"{subset}/ 原有文件逐字节未变"
-    )
-    return Check(label=f"`{subset}/` 未被为了让测试变绿而改写", ok=not broken, detail=detail)
-
-
-def subset_only_added(subset: str, baseline: Path, workdir: Path) -> Check:
-    """只许加不许删 —— 用于"补一个防回归测试"这类任务。
-
-    字节级不变在这里太严：往既有的 `tests/test_x.py` 里加一个函数是完全正确的
-    做法，判它失败等于逼模型去新建文件。这里改判"基线的每一行是否还在"，
-    删断言、改断言、删文件都会被抓到。
-    """
-    before, after = _files(baseline / subset), _files(workdir / subset)
-    problems: list[str] = []
-    for name, payload in before.items():
-        current = after.get(name)
-        if current is None:
-            problems.append(f"{name} 被删除")
-            continue
-        old = Counter(payload.decode("utf-8", "replace").splitlines())
-        new = Counter(current.decode("utf-8", "replace").splitlines())
-        lost = [line for line, count in old.items() if line.strip() and new.get(line, 0) < count]
-        if lost:
-            problems.append(f"{name} 少了 {len(lost)} 行，例如 {lost[0].strip()[:60]!r}")
-    added = sum(before.get(name) is None for name in after)
-    detail = "; ".join(problems[:3]) if problems else f"{subset}/ 基线内容逐行保留，新增 {added} 个文件"
-    return Check(label=f"`{subset}/` 只增不删（没删断言换全绿）", ok=not problems, detail=detail)
-
 
 # --------------------------------------------------------------- 探测脚本（任务承诺的行为）
 
@@ -520,21 +355,7 @@ def _config_for(engine: str, demo: Demo, workdir: Path, trace: Path) -> Config:
 
 def prepare(demo: Demo, *, work_root: Path) -> tuple[Path, Path]:
     baseline = FIXTURES / demo.fixture
-    workdir = work_root / demo.id
-    if workdir.exists():
-        try:
-            shutil.rmtree(workdir)
-        except OSError:
-            # Windows 保留设备名（NUL、CON…）会留下 rm 删不掉的残留文件。
-            # 与其让整个 demo 卡在 WinError 5，不如换一个带时间戳的副本继续。
-            workdir = work_root / f"{demo.id}.{time.strftime('%H%M%S')}"
-            shutil.rmtree(workdir, ignore_errors=True)
-    workdir.parent.mkdir(parents=True, exist_ok=True)
-    if baseline.is_dir():
-        shutil.copytree(baseline, workdir, ignore=shutil.ignore_patterns(*NOISE))
-    else:
-        workdir.mkdir(parents=True)
-    return workdir, baseline
+    return isolate(baseline, work_root / demo.id), baseline
 
 
 def run_demo(
@@ -656,9 +477,13 @@ def evidence_markdown(run: Run) -> str:
         f"| expected | {demo.expected} |",
         f"| actual | `{run.result.termination.value}` · 判定 {run.outcome.verdict()}（{run.outcome.passed}/{len(run.outcome.checks)}） |",
         f"| turns / tokens | {run.result.state.turn} 轮 / {tokens} |",
-        f"| tool_calls | {tool_calls} 次，其中 is_error {tool_errors} 次（{rate}） |",
+        f"| tool_calls | 发起 {tool_calls} 次 · 执行 {stats.get('tool_executed', tool_calls)} 次，"
+        f"其中 is_error {tool_errors} 次（{rate}） |",
         f"| 工具序列 | {' → '.join(str(name) for name in stats.get('tool_sequence', [])) or '—'} |",
-        f"| redundant / denied | {stats.get('redundant_calls', 0)} / {stats.get('denied_actions', 0)} |",
+        f"| denied / repeated / stalled | {stats.get('denied_actions', 0)} 次被拒 · "
+        f"{stats.get('repeated_calls', 0)} 次逐调用重复 · {stats.get('stalled_groups', 0)} 轮整组重演 |",
+        f"| 失败模式 | {'、'.join(stats.get('failure_modes', [])) or '—'} |",
+        f"| 上下文峰值 | {stats.get('context_peak_tokens', 0):,} tokens |",
         f"| 权限模式 | `{run.mode}`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |",
         f"| wall time | {run.elapsed:.1f}s |",
         f"| trace | `demos/traces/{run.trace.name}` |",
@@ -709,8 +534,8 @@ def _verdict_line(run: Run) -> str:
     s = run.stats
     return (
         f"{s.get('termination', 'unknown')} · {s.get('turns', 0)} 轮"
-        f" · {s.get('tool_calls', 0)} 次工具调用（{s.get('tool_errors', 0)} 次报错"
-        f"，{s.get('denied_actions', 0)} 次被拦）· {run.tokens:,} tokens"
+        f" · 发起 {s.get('tool_calls', 0)} 次调用（执行 {s.get('tool_executed', 0)} 次、"
+        f"报错 {s.get('tool_errors', 0)} 次、被拦 {s.get('denied_actions', 0)} 次）· {run.tokens:,} tokens"
     )
 
 

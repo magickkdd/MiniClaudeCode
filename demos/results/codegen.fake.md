@@ -10,11 +10,13 @@
 | expected | pytest 退出码 0，且 `evaluate` 的四则语义与除零行为经独立脚本校验 |
 | actual | `completed` · 判定 PASS（4/4） |
 | turns / tokens | 8 轮 / 不适用（FakeLLM 不返回 usage） |
-| tool_calls | 9 次，其中 is_error 0 次（0%） |
+| tool_calls | 发起 9 次 · 执行 9 次，其中 is_error 0 次（0%） |
 | 工具序列 | write_todos → write_file → write_file → write_file → run_tests → write_file → run_tests → write_file → write_todos |
-| redundant / denied | 0 / 0 |
+| denied / repeated / stalled | 0 次被拒 · 0 次逐调用重复 · 0 轮整组重演 |
+| 失败模式 | — |
+| 上下文峰值 | 0 tokens |
 | 权限模式 | `auto`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |
-| wall time | 1.9s |
+| wall time | 2.5s |
 | trace | `demos/traces/codegen.fake.jsonl` |
 | 工作副本 | `demos/.work/codegen`（判定就在这个目录跑） |
 
@@ -43,10 +45,10 @@
 ✓ write_file  calculator/__init__.py  1ms
 ✓ write_file  calculator/core.py  1ms
 ✓ write_file  tests/test_calculator.py  1ms
-✓ run_tests     863ms
+✓ run_tests     1.2s
 `2 + 3 * 4` 得到 20，说明我按从左到右一路算了。改成两遍扫描：先折叠乘除，再算加减。
 ✓ write_file  calculator/core.py  1ms
-✓ run_tests     980ms
+✓ run_tests     1.2s
 全绿。把用法和「不做括号」这条边界写进 README，省得后来人猜。
 ✓ write_file  README.md  3ms
 ✓ write_todos 4 步  0ms

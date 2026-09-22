@@ -108,6 +108,17 @@ def test_replay_skips_corrupt_lines(tmp_path: Path) -> None:
     assert [r["kind"] for r in replay(path)] == ["turn_start", "run_end"]
 
 
+def test_replay_skips_json_that_is_not_an_object(tmp_path: Path) -> None:
+    """`1` 和 `[...]` 都是合法 JSON，但下游只认 record.get(...)。
+
+    半行被截断成裸数字时，收下它的代价是以后某条命令 AttributeError —— 而那是
+    调试工具最不该发生的失败方式。
+    """
+    path = tmp_path / "f.jsonl"
+    path.write_text('1\n[{"kind": "turn_start"}]\n"kind"\n{"seq": 3, "kind": "run_end"}\n', encoding="utf-8")
+    assert [r["kind"] for r in replay(path)] == ["run_end"]
+
+
 def test_summarize_of_a_missing_session_is_harmless(tmp_path: Path) -> None:
     path = tmp_path / "empty.jsonl"
     path.write_text("", encoding="utf-8")

@@ -1,0 +1,411 @@
+"""trace 契约测试 —— SPEC v2 §3.1 的机器化不变式。
+
+这个文件盯的不是"功能对不对"，而是"报表里的数字是不是真的被测出来的"。
+v1 的 `redundant_calls` 定义了、进了 snapshot、被 summarize 读、印在 9 份证据
+文件里，全代码库没有一处累加它 —— 这类错误靠人眼 review 抓不干净，靠语法测试
+也抓不到，只能把"指标必须有产地"变成一条会失败的测试。
+
+五条不变式：
+
+1. `test_metrics_have_producers`：`AgentState.snapshot()` 的每个键都有非平凡写入点。
+2. `test_summarize_reads_only_recorded_fields`：报表从 `run_end` 读的每个键，
+   真实轨迹里那个字段确实存在（SPEC v1 写 `session_end`、代码写 `run_end`
+   这类漂移就在这里失败）。
+3. `test_repeated_and_stalled_...` / `test_attempts_and_executions_...` /
+   `test_live_and_offline_classification_agree`：口径本身对得上，且实时与离线同一份判定。
+4. `test_trace_schema_snapshot`：每个 kind 的键名集合与 `tests/schema_v2.json` 一致；
+   `test_every_kind_the_code_emits_is_pinned` 再用静态扫描补齐样例轨迹走不到的 kind。
+5. 最后两条：检测器自身必须会报警，纯初始化不算产地。
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fakes import FakeLLM, scripted_final_text, scripted_tool_calls
+from miniclaude.agent.context import ContextManager
+from miniclaude.agent.loop import Agent
+from miniclaude.agent.permissions import PermissionGate, PermissionMode
+from miniclaude.agent.planner import TodoList
+from miniclaude.agent.state import AgentState
+from miniclaude.agent.todo_tool import WriteTodosTool
+from miniclaude.infra.failure import classify, facts_from_records
+from miniclaude.infra.trace import OUTPUT_CAP, Tracer, prompt_hash, replay, summarize_records
+from miniclaude.llm.openai_compat import LLMError
+from miniclaude.tools.registry import ToolRegistry
+from miniclaude.tools.workspace import Workspace
+
+import miniclaude
+
+SRC_ROOT = Path(miniclaude.__file__).parent
+SCHEMA_FILE = Path(__file__).parent / "schema_v2.json"
+
+# 每条记录都必须自带这些字段 —— 少一个就不是"同一份 trace"，离线工具会读崩。
+COMMON_ENVELOPE = frozenset({"seq", "ts", "session", "kind", "trace_id", "schema_version"})
+
+# 这些键不是"某个字段被累加"，而是从多条记录算出来的 —— 每条都要写清怎么算的。
+DERIVED_METRICS = {
+    "session": "records[0]['session']",
+    "termination": "最后一条 run_end 的 termination",
+    "turns": "len(kind == turn_start)",
+    "tool_executed": "len(kind == tool_call)",
+    "tokens": "sum(每条 llm_response 的 usage.prompt + usage.completion)",
+    "tool_sequence": "[tool_call.name]",
+    "output_chars": "sum(tool_call.output_chars)",
+    "omitted_output_chars": "sum(max(0, tool_call.output_chars - 2 * (OUTPUT_CAP // 2)))",
+}
+"""报表里允许存在的派生指标：值由多条记录算出，不来自 `run_end` 的单个字段。
+
+`tool_calls` / `tool_errors` 刻意不在这里 —— 它们必须读 `run_end` 里 state 记的那份，
+否则"发起数"和"执行数"会各自顶一个同名指标（v1 就是这样分叉的）。
+"""
+
+
+# --------------------------------------------------------------- 检测器
+
+
+def _dotted(node: ast.expr) -> tuple[str, ...] | None:
+    parts: list[str] = []
+    current: ast.expr = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name):
+        return None
+    parts.append(current.id)
+    parts.reverse()
+    if parts[0] in {"self", "cls"}:
+        parts = parts[1:]
+    return tuple(parts) or None
+
+
+def _is_trivial(value: ast.expr | None) -> bool:
+    """`x = 0` / `x = []` / `x = Usage()` 这类赋值只是初始化，不构成"这个数被测出来了"。"""
+    if value is None:
+        return False
+    if isinstance(value, ast.Constant):
+        return value.value in (0, 0.0, "", None, False)
+    if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+        return not value.elts
+    if isinstance(value, ast.Dict):
+        return not value.keys and not value.values
+    if isinstance(value, ast.Call):
+        func = value.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+        return name[:1].isupper() or name in {"field", "list", "dict", "set", "tuple"}
+    return False
+
+
+def written_targets(node: ast.AST) -> list[tuple[ast.expr, ast.expr | None]]:
+    """返回这个节点写入的 (目标, 右值) 对。"""
+    if isinstance(node, ast.Assign):
+        return [(target, node.value) for target in node.targets]
+    if isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+        return [(node.target, node.value)]
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return [(node.target, None)]
+    return []
+
+
+def write_paths(sources: dict[str, str]) -> set[tuple[str, ...]]:
+    """所有**非平凡**属性写入的 dotted 路径集合。"""
+    paths: set[tuple[str, ...]] = set()
+    for text in sources.values():
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            for target, value in written_targets(node):
+                if _is_trivial(value):
+                    continue
+                dotted = _dotted(target)
+                if dotted:
+                    paths.add(dotted)
+    return paths
+
+
+def package_sources() -> dict[str, str]:
+    return {str(file): file.read_text(encoding="utf-8") for file in sorted(SRC_ROOT.rglob("*.py"))}
+
+
+def emitted_kinds() -> set[str]:
+    """代码里所有 `tracer.log("...")` / `self._trace("...")` 的第一个字面量参数。"""
+    out: set[str] = set()
+    for text in package_sources().values():
+        for node in ast.walk(ast.parse(text)):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            first = node.args[0]
+            if name in {"_trace", "log"} and isinstance(first, ast.Constant) and isinstance(first.value, str):
+                out.add(first.value)
+    return out
+
+
+def produced_keys(paths: set[tuple[str, ...]]) -> set[str]:
+    """一个名字只要有"写进它的某条路径"就算有产地（含 `usage.prompt_tokens` 这类嵌套）。"""
+    out: set[str] = set()
+    for path in paths:
+        out.add(path[0])
+        out.add(path[-1])
+    return out
+
+
+# --------------------------------------------------------------- 两次真会话
+
+
+PROMPT = "契约测试用提示词。"
+
+TODOS = {
+    "todos": [
+        {"content": "读两次 notes.txt", "status": "done"},
+        {"content": "写一个文件", "status": "pending"},  # 故意留未完成
+    ]
+}
+
+
+def make_traced_agent(
+    root: Path,
+    responses: list[Any],
+    *,
+    session_id: str,
+    mode: PermissionMode = PermissionMode.ASK,
+) -> tuple[Agent, Path]:
+    """真工具 + 假模型 + 真落盘日志。schema 与指标都从这两次会话里取。
+
+    `mode=ASK` 且没有确认渠道时，写操作会被保守拒绝 —— 契约要覆盖"发起了但没执行"
+    这条形状，否则 `tool_calls` 与 `tool_executed` 永远相等，两个名字看着都一样。
+    """
+    (root / "notes.txt").write_text("第一行\n第二行\n", encoding="utf-8")
+    workspace = Workspace(root)
+    todos = TodoList()
+    registry = ToolRegistry.default(
+        workspace, bash_timeout=30, extra_tools=[WriteTodosTool(workspace, todos)]
+    )
+    trace_path = root / f"{session_id}.jsonl"
+    tracer = Tracer(trace_path, session_id=session_id)
+    tracer.start_session(
+        model="fake",
+        tools=list(registry.names()),
+        config={"mode": mode.value},
+        system_prompt_hash=prompt_hash(PROMPT),
+    )
+    agent = Agent(
+        llm=FakeLLM(responses),
+        registry=registry,
+        gate=PermissionGate(workspace=workspace, mode=mode, confirmer=None),
+        system_prompt=PROMPT,
+        context=ContextManager(budget=200_000),
+        todos=todos,
+        tracer=tracer,
+        price_per_mtokens=2.5,
+    )
+    return agent, trace_path
+
+
+# 一次"正常但磕磕绊绊"的会话：重复读、被拒的写、虚构工具名、留了未完成的待办。
+SESSION_SCRIPT = [
+    scripted_tool_calls([("read_file", {"path": "notes.txt"})]),
+    scripted_tool_calls([("read_file", {"path": "notes.txt"})]),
+    scripted_tool_calls([("write_file", {"path": "out.txt", "content": "x"}), ("list_files", {})]),
+    scripted_tool_calls([("write_todos", TODOS)]),
+    scripted_final_text("读完了，写被拒了。"),
+]
+
+
+@pytest.fixture(scope="module")
+def session(tmp_path_factory: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    root = tmp_path_factory.mktemp("contract")
+    agent, trace_path = make_traced_agent(root, SESSION_SCRIPT, session_id="contract")
+    agent.run("读两次 notes.txt，写个文件，然后收尾")
+    records = replay(trace_path)
+    return records, summarize_records(records)
+
+
+@pytest.fixture(scope="module")
+def broken(tmp_path_factory: Any) -> list[dict[str, Any]]:
+    """模型侧故障的会话：只有它才产出 `error` 记录，schema 快照必须覆盖到。"""
+    root = tmp_path_factory.mktemp("contract-broken")
+    agent, trace_path = make_traced_agent(root, [LLMError("端点返回 500")], session_id="broken")
+    agent.run("这个任务跑不动")
+    return replay(trace_path)
+
+
+# --------------------------------------------------------------- 不变式
+
+
+def test_metrics_have_producers() -> None:
+    paths = write_paths(package_sources())
+    produced = produced_keys(paths)
+    orphans = [key for key in AgentState.snapshot(AgentState()) if key not in produced]
+    assert not orphans, (
+        f"这些指标没有任何写入点，报表里的它们只是默认值：{orphans}。"
+        "要么补上累加，要么把字段删掉 —— 不许留着它继续印进证据文件（SPEC v2 §0.3 E1）。"
+    )
+
+
+def test_summarize_reads_only_recorded_fields(session: Any) -> None:
+    records, report = session
+    end = next(record for record in reversed(records) if record.get("kind") == "run_end")
+    unexplained = {key for key in report if key not in DERIVED_METRICS and key not in end}
+    assert not unexplained, f"报表键 {sorted(unexplained)} 在 run_end 记录里不存在 —— 它被谁写的？"
+
+
+def test_repeated_and_stalled_are_measured_not_assumed(session: Any) -> None:
+    """E1/E2 的正向证据：一次整组重演要同时产出两个口径，且它们不相等、都不终止会话。
+
+    `repeated_calls` 逐调用统计（第 2 次 read_file 与前一次同名同参 → 1），
+    `stalled_groups` 整组统计（第 2 轮的签名与第 1 轮相同 → 1 组，未到 STALL_LIMIT=3
+    所以不判停滞）。v1 把这两个混成一个 `redundant_calls`，谁也不累加。
+    """
+    _, report = session
+    assert report["repeated_calls"] == 1, "连续两次同名同参调用必须被计入 repeated_calls"
+    assert report["stalled_groups"] == 1, "一次整组重演计 1，但不等于终止"
+    assert report["termination"] == "completed", "重复一轮就收尾，不构成 STALLED"
+
+
+def test_attempts_and_executions_are_two_different_numbers(session: Any) -> None:
+    """被拒 / 虚构工具名的调用"发起了但没执行"，两个数必须各自有名字。
+
+    脚本第 3 轮一次发起 write_file（ASK 模式无确认渠道 → 拒）与 list_files（不存在的
+    工具名），所以这一轮 0 次执行。v1 里 `tool_calls` 一个名字两头用。
+    """
+    _, report = session
+    assert report["tool_calls"] == 5, "5 次发起：2 读 + 被拒的写 + 虚构工具名 + 待办"
+    assert report["tool_executed"] == 3, "只有 3 次真的跑过"
+    assert report["denied_actions"] == 1, "denied 只数权限门拒的，虚构工具名不算用户拒绝"
+    assert report["tool_errors"] == 2, "被拒与虚构都给了模型一个 is_error 结果"
+    # 只有 thrashing：整组重演了一次。no_verification 不成立 —— 这次会话一个字没写，
+    # 被拒的 write_file 不算"改过东西"（判据见 infra/failure.py 的同名规则）。
+    assert report["failure_modes"] == ["thrashing"]
+
+
+def test_output_chars_is_summed_from_records(session: Any) -> None:
+    """`wasted_output_ratio` 的分子与分母只能从 `tool_call` 记录里加出来。
+
+    这次会话的输出都远小于 `OUTPUT_CAP`，所以"被省略的字符"必须是 **0** ——
+    不是"没算"，是算了且为 0。少了这条区分，非截断会话上永远显示 0%，
+    和"这个字段根本没落盘"长得一模一样。
+    """
+    records, report = session
+    calls = [record for record in records if record.get("kind") == "tool_call"]
+    assert report["output_chars"] == sum(int(record.get("output_chars") or 0) for record in calls)
+    assert report["output_chars"] > 0, "全 0 说明 tool_call 里没记这个字段，那 wasted_output_ratio 就是假的"
+    assert report["omitted_output_chars"] == 0
+
+
+def test_omitted_chars_counts_only_what_cap_dropped() -> None:
+    """省略量 = `output_chars - 2 * (OUTPUT_CAP // 2)`，只算循环层 `_cap` 丢掉的。
+
+    分母取截断前还是截断后，同一个名字会差出一倍，所以定义本身要有一条测试钉住。
+    """
+    keep = OUTPUT_CAP // 2
+    records = [
+        {"seq": 1, "session": "s", "kind": "session_start"},
+        {"seq": 2, "session": "s", "kind": "tool_call", "turn": 1, "name": "read_file",
+         "ok": True, "output_chars": 2 * keep + 500},
+        {"seq": 3, "session": "s", "kind": "tool_call", "turn": 1, "name": "run_tests",
+         "ok": True, "output_chars": 80},
+    ]
+    report = summarize_records(records)
+    assert report["output_chars"] == 2 * keep + 580
+    assert report["omitted_output_chars"] == 500, "没到上限的那个输出不该算进浪费"
+
+
+def test_live_and_offline_classification_agree(session: Any) -> None:
+    """同一份轨迹，实时判定与 `mcc trace --why-failed` 的离线判定必须给同一批标签。
+
+    这是"派生结论随记录落盘"这条纪律的存在理由：离线侧看不见完整参数和内存里的
+    事实，只能读 trace。两边算出不同结果就说明有字段的定义散在了两处。
+    """
+    _, report = session
+    assert [found.mode.value for found in classify(facts_from_records(session[0]))] == report["failure_modes"]
+
+
+def test_trace_schema_snapshot(session: Any, broken: Any) -> None:
+    """每个 kind 的字段集合与快照逐字段比对。
+
+    加字段/改名/删字段时：先跑 `MCC_REGEN_SCHEMA=1 pytest tests/test_trace_contract.py`
+    重生成 `tests/schema_v2.json`，再同步 SPEC v2 §3.1 的事件表 —— 两处不一致就是
+    "文档说的和代码做的不是一回事"，v1 的 `session_end` 事故（§0.3 E3）正是这么发生的。
+    """
+    actual = _keys_by_kind(list(session[0]) + list(broken))
+    for kind, keys in sorted(actual.items()):
+        assert keys >= COMMON_ENVELOPE, f"{kind} 缺了公共字段：{sorted(COMMON_ENVELOPE - keys)}"
+    if os.environ.get("MCC_REGEN_SCHEMA") == "1":
+        payload = {kind: sorted(keys) for kind, keys in actual.items()}
+        SCHEMA_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        pytest.skip("已重新生成 tests/schema_v2.json")
+    assert SCHEMA_FILE.exists(), f"缺少快照文件 {SCHEMA_FILE.name}，用 MCC_REGEN_SCHEMA=1 生成它"
+    expected = json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))
+    assert {kind: sorted(keys) for kind, keys in actual.items()} == expected, _schema_diff(expected, actual)
+
+
+def test_every_kind_the_code_emits_is_pinned(session: Any, broken: Any) -> None:
+    """代码里出现的每个 kind 都必须在快照里 —— 光靠样例轨迹覆盖不到全部分支。
+
+    会话只走到它走到的那些 kind；`error` 要靠模型故障、`permission` 的 deny 要靠拒绝。
+    这条用静态扫描补齐：新增一个 kind 而没同步快照就是测试红，而不是"没人跑到就算没事"。
+    """
+    expected = set(json.loads(SCHEMA_FILE.read_text(encoding="utf-8"))) if SCHEMA_FILE.exists() else set()
+    emitted = emitted_kinds()
+    assert emitted <= expected, (
+        f"这些 kind 代码里会产出、快照里没有：{sorted(emitted - expected)}。"
+        "跑 MCC_REGEN_SCHEMA=1 重生成，并同步 SPEC v2 §3.1。"
+    )
+
+
+def _keys_by_kind(records: list[dict[str, Any]]) -> dict[str, set[str]]:
+    out: dict[str, set[str]] = {}
+    for record in records:
+        out.setdefault(str(record.get("kind")), set()).update(record.keys())
+    return {kind: keys for kind, keys in out.items()}
+
+
+def _schema_diff(expected: dict[str, list[str]], actual: dict[str, list[str]]) -> str:
+    lines = ["trace 字段形状与快照不一致（改代码要同时改 tests/schema_v2.json 与 SPEC §3.1）："]
+    for kind in sorted(set(expected) | set(actual)):
+        if kind not in actual:
+            lines.append(f"  · {kind}: 快照里有、实际不再产出（kind 被删或改名？）")
+            continue
+        if kind not in expected:
+            lines.append(f"  · {kind}: 新出现的 kind，快照里没有")
+            continue
+        added = sorted(set(actual[kind]) - set(expected[kind]))
+        removed = sorted(set(expected[kind]) - set(actual[kind]))
+        if added or removed:
+            lines.append(f"  · {kind}: +{added or '[]'} -{removed or '[]'}")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------- 检测器自检
+
+
+ORPHAN_SOURCE = """
+class State:
+    measured: int = 0
+    guessed: int = 0
+
+    def snapshot(self):
+        return {"measured": self.measured, "guessed": self.guessed}
+
+    def bump(self):
+        self.measured += 1
+"""
+
+
+def test_detector_catches_a_planted_orphan() -> None:
+    """前两条不变式用的检测器必须真的会报警 —— 否则它是绿色的摆设。"""
+    produced = produced_keys(write_paths({"orphan.py": ORPHAN_SOURCE}))
+    assert "measured" in produced
+    assert "guessed" not in produced
+
+
+def test_detector_ignores_pure_initialisation() -> None:
+    """`self.x = 0` 不算产地。这条把"定义了但从未累加"的形状钉死。"""
+    produced = produced_keys(write_paths({"a.py": "class S:\n    def __init__(self):\n        self.x = 0\n"}))
+    assert "x" not in produced

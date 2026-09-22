@@ -44,6 +44,7 @@ class Config:
     token_budget: int = DEFAULTS["TOKEN_BUDGET"]
     max_total_tokens: int = DEFAULTS["MAX_TOTAL_TOKENS"]
     request_timeout: int = DEFAULTS["LLM_REQUEST_TIMEOUT"]
+    price_per_mtokens: float = 0.0
     trace_path: Path | None = None
 
     @classmethod
@@ -74,6 +75,7 @@ class Config:
             token_budget=_int("TOKEN_BUDGET"),
             max_total_tokens=_int("MAX_TOTAL_TOKENS"),
             request_timeout=_int("LLM_REQUEST_TIMEOUT"),
+            price_per_mtokens=_float("PRICE_PER_MTOKENS"),
             trace_path=trace_path,
         )
 
@@ -87,6 +89,8 @@ class Config:
             "max_turns": self.max_turns,
             "max_tokens": self.max_tokens,
             "max_total_tokens": self.max_total_tokens,
+            "token_budget": self.token_budget,
+            "price_per_mtokens": self.price_per_mtokens,
             "trace_path": str(self.trace_path) if self.trace_path else None,
         }
 
@@ -124,6 +128,17 @@ def _int(name: str) -> int:
         return int(raw)
     except ValueError as exc:
         raise ConfigError(f"{name} 必须是整数，当前值：{raw!r}") from exc
+
+
+def _float(name: str) -> float:
+    """目前只有单价用浮点：token 计价天然是小数，用 int 会把它压成 0 或 1。"""
+    raw = _get(name)
+    if not raw:
+        return 0.0
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} 必须是数字，当前值：{raw!r}") from exc
 
 
 def _resolve(raw: str, base: Path) -> Path:

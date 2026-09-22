@@ -23,8 +23,9 @@ from miniclaude.agent.prompts import build_system_prompt
 from miniclaude.agent.state import AgentResult, TerminationReason
 from miniclaude.agent.todo_tool import WriteTodosTool
 from miniclaude.config import Config, ConfigError, get_config
+from miniclaude.cli import trace_cmd
 from miniclaude.cli.render import Renderer
-from miniclaude.infra.trace import Tracer, summarize
+from miniclaude.infra.trace import Tracer, of_session, prompt_hash, replay, summarize_records
 from miniclaude.llm.openai_compat import OpenAICompatClient
 from miniclaude.tools.registry import ToolRegistry
 from miniclaude.tools.workspace import Workspace
@@ -39,7 +40,19 @@ HELP = """命令：
   /todos             显示当前任务清单
   /mode <模式>       切换权限模式：ask / auto / readonly
   /trace             显示本次会话日志位置与统计
-  /exit              退出（也可以按 Ctrl-D）"""
+  /exit              退出（也可以按 Ctrl-D）
+
+不在 REPL 里的诊断命令（读日志，不占对话轮数）：
+  mcc trace --latest                最近一次会话的时间线
+  mcc trace --latest --hot          最贵 3 轮 / 报错最多的工具 / 重复调用簇
+  mcc trace --latest --why-failed   失败模式标签 + 证据 + 处方
+  mcc trace <会话 id> --json        机器可读汇总（eval 与脚本用）
+
+  mcc eval --list                   列出考题与题集哈希
+  mcc eval --lint                   考题自检：这道题**可能**被做对吗
+  mcc eval                          fake 引擎跑全批（不读 .env、不打网络、秒级）
+  mcc eval --engine live --smoke    6 道 supports_live 题的真实模型冒烟
+  mcc eval --baseline <文件>        与基线对比，退步写进报表"""
 
 
 class RequestedExit(Exception):
@@ -84,8 +97,22 @@ def build_session(
         workspace, bash_timeout=cfg.bash_timeout, extra_tools=[WriteTodosTool(workspace, todos)]
     )
     gate = PermissionGate(workspace=workspace, mode=mode, confirmer=confirmer or make_confirmer())
+    system_prompt = build_system_prompt(
+        project_root=workspace.root,
+        platform=sys.platform,
+        model=cfg.model,
+        python_executable=sys.executable,
+        tool_names=registry.names(),
+        workspace=workspace,
+    )
     tracer = Tracer(cfg.trace_path)
-    tracer.start_session(model=cfg.model, tools=registry.names(), config=cfg.redacted())
+    # 提示词指纹进 trace：两次跑批之间提示词改没改，看这个字段而不是看 diff
+    tracer.start_session(
+        model=cfg.model,
+        tools=registry.names(),
+        config=cfg.redacted(),
+        system_prompt_hash=prompt_hash(system_prompt),
+    )
 
     render = renderer if renderer is not None else Renderer(verbose=verbose, use_rich=use_rich)
     client = llm if llm is not None else OpenAICompatClient(
@@ -99,20 +126,14 @@ def build_session(
         llm=client,
         registry=registry,
         gate=gate,
-        system_prompt=build_system_prompt(
-            project_root=workspace.root,
-            platform=sys.platform,
-            model=cfg.model,
-            python_executable=sys.executable,
-            tool_names=registry.names(),
-            workspace=workspace,
-        ),
+        system_prompt=system_prompt,
         max_turns=cfg.max_turns,
         max_total_tokens=cfg.max_total_tokens,
         context=ContextManager(budget=cfg.token_budget),
         todos=todos,
         tracer=tracer,
         on_event=render.handle,
+        price_per_mtokens=cfg.price_per_mtokens,
     )
     return Session(agent=agent, config=cfg, renderer=render, tracer=tracer, workspace=workspace)
 
@@ -182,11 +203,17 @@ def handle_command(session: Session, raw: str) -> str:
         path = session.tracer.path
         if not path:
             return "本次会话没有写日志（--no-trace 或 TRACE_PATH 未配置）。"
-        stats = summarize(Path(path))
+        # 按会话过滤：TRACE_PATH 是追加式的，一个文件里可能已经有好几次会话
+        stats = summarize_records(of_session(replay(Path(path)), session.tracer.session_id))
+        modes = "、".join(stats["failure_modes"]) if stats["failure_modes"] else "无"
         return (
-            f"  日志 {path}\n"
+            f"  日志 {path} · 会话 {stats['session']}\n"
             f"  轮数 {stats['turns']} · 工具 {stats['tool_calls']} 次（{stats['tool_errors']} 次报错）"
-            f" · 结束于 {stats['termination']}"
+            f" · 结束于 {stats['termination']}\n"
+            f"  重复调用 {stats['repeated_calls']} 次 · 整组重演 {stats['stalled_groups']} 轮"
+            f" · 被拒 {stats['denied_actions']} 次 · 上下文峰值 {stats['context_peak_tokens']:,} tokens\n"
+            f"  失败模式：{modes}\n"
+            "  看细节：mcc trace --latest --hot / --why-failed"
         )
     return f"不认识的命令：{raw}\n\n{HELP}"
 
@@ -287,9 +314,40 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _trace_entry(argv: Sequence[str]) -> int:
+    """`mcc trace` —— 只读日志。TRACE_PATH 仍经 Config 解析，env 读取不散落到别处。"""
+    try:
+        config = get_config()
+    except ConfigError as exc:
+        print(f"配置不完整：{exc}（日志路径也来自这份配置）", file=sys.stderr)
+        return 2
+    return trace_cmd.run(argv, config)
+
+
+def _eval_entry(argv: Sequence[str]) -> int:
+    """`mcc eval` —— 跑批评测。延迟 import 有两个理由：`eval.runner` 反过来要用
+    本模块的 `build_session`（顶层 import 会成环），以及 fake 引擎不该因为
+    `.env` 缺字段而连 `--help` 都打不开。
+    """
+    from miniclaude.cli import eval_cmd
+
+    return eval_cmd.run(argv)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """命令行入口：无参进 REPL，给了任务则跑一轮并用退出码交代结果。"""
-    args = build_parser().parse_args(argv)
+    """命令行入口：无参进 REPL，给了任务则跑一轮并用退出码交代结果。
+
+    `trace` 与 `eval` 是诊断/批量子命令，放在最前面分流：`trace` 只读日志，
+    排查一次烧了 8 万 token 的会话时不该再依赖 LLM 配置可用；`eval` 自己管
+    引擎与配置，fake 模式连 `.env` 都不需要。
+    """
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw and raw[0] == "trace":
+        return _trace_entry(raw[1:])
+    if raw and raw[0] == "eval":
+        return _eval_entry(raw[1:])
+
+    args = build_parser().parse_args(raw)
 
     try:
         config = get_config()

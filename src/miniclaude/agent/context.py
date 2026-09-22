@@ -51,14 +51,21 @@ class ContextManager:
     def estimate(
         self, *, system: str = "", tools: Iterable[Any] = (), messages: Iterable[Message] = ()
     ) -> int:
-        return int(self.wire_chars(system=system, tools=tools, messages=messages) / self.chars_per_token)
+        return self.estimate_from_chars(self.wire_chars(system=system, tools=tools, messages=messages))
+
+    def estimate_from_chars(self, chars: int) -> int:
+        """已经有字符数时别再扫一遍历史 —— 一轮里估算三次是白烧 CPU。"""
+        return int(chars / self.chars_per_token)
+
+    def pressure_from_chars(self, chars: int) -> float:
+        if self.budget <= 0:
+            return 0.0
+        return self.estimate_from_chars(chars) / self.budget
 
     def pressure(
         self, *, system: str = "", tools: Iterable[Any] = (), messages: Iterable[Message] = ()
     ) -> float:
-        if self.budget <= 0:
-            return 0.0
-        return self.estimate(system=system, tools=tools, messages=messages) / self.budget
+        return self.pressure_from_chars(self.wire_chars(system=system, tools=tools, messages=messages))
 
     def calibrate(self, actual_prompt_tokens: int, sent_chars: int) -> None:
         """用一次真实往返的 usage 修正系数（取滑动平均，避免单次抖动）。
@@ -74,6 +81,14 @@ class ContextManager:
         self.chars_per_token = max(1.2, min(12.0, 0.7 * self.chars_per_token + 0.3 * observed))
 
     # ------------------------------------------------------------ 状态判断
+
+    @property
+    def warn_pressure(self) -> float:
+        return _WARN_PRESSURE
+
+    @property
+    def stop_pressure(self) -> float:
+        return _STOP_PRESSURE
 
     def should_warn(
         self, *, system: str = "", tools: Iterable[Any] = (), messages: Iterable[Message] = ()

@@ -9,12 +9,14 @@
 | repo/baseline | `demos/fixtures/bug-hunt` · baseline `66e7e20db481`（13 个文件） |
 | expected | 工作区哈希与基线一致（真没写盘）；答案指出 `divmod` 用错了换算常量并解释测试为何漏掉 |
 | actual | `completed` · 判定 PASS（3/3） |
-| turns / tokens | 5 轮 / 20,680 tokens |
-| tool_calls | 6 次，其中 is_error 1 次（17%） |
+| turns / tokens | 4 轮 / 14,976 tokens |
+| tool_calls | 6 次，其中 is_error 2 次（33%） |
 | 工具序列 | read_file → read_file → read_file → find_files → read_file → read_file |
-| redundant / denied | 0 / 3 |
+| denied / repeated / stalled | 0 次被拒 · 0 次逐调用重复 · 0 轮整组重演 |
+| 失败模式 | — |
+| 上下文峰值 | 4,275 tokens |
 | 权限模式 | `readonly`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |
-| wall time | 8.4s |
+| wall time | 12.8s |
 | trace | `demos/traces/readonly-qa.live.jsonl` |
 | 工作副本 | `demos/.work/readonly-qa`（判定就在这个目录跑） |
 
@@ -30,97 +32,73 @@
 
 ```text
 ✓ read_file   README.md  2ms
-✗ read_file   src/format.py  0ms
-✓ read_file   tests/test_format.py  2ms
+✗ read_file   format.py  0ms
+✗ read_file   test_format.py  0ms
 ✓ find_files  **/*.py  1ms
 ✓ read_file   duration/format.py  2ms
-✓ read_file   tests/test_format.py  1ms
-让我复现一下实际输出：
-  已拦下 bash：当前是只读模式，execute 级操作被禁用。
-  已拦下 bash：当前是只读模式，execute 级操作被禁用。
-  已拦下 bash：当前是只读模式，execute 级操作被禁用。
-代码里已经能直接看出问题，无需执行。分析如下：
+✓ read_file   tests/test_format.py  2ms
+不一致，根因就在 `duration/format.py` 第 15 行。
 
----
+## 为什么跟 README 承诺对不上
 
-## 不一致 & 根因
+README 的"超过一天"规则说：**保留 `d` 段，后面的 `h/m/s` 照旧打印（哪怕是 0）**，表格里也给了 `90000 → 1d1h0m0s` 这个用例。
 
-### README 的承诺
-
-第 33 行明确写着：
-> **超过一天时**保留 `d` 段，后面的 `h/m/s` 照旧打印（**哪怕是 0**）。
-
-README 表格里 `90000` → `1d1h0m0s` 和 `90061` → `1d1h1m1s` 也体现了"满一天后始终输出 d/h/m/s 四段"的规则。
-
-### 实际代码
-
-`duration/format.py` **第 15 行**是 bug 所在：
+但实现里：
 
 ```python
-days, rest = divmod(total, SECONDS_PER_HOUR)   # ← 应该是 SECONDS_PER_DAY (86400)
+# duration/format.py:15
+days, rest = divmod(total, SECONDS_PER_HOUR)   # ← bug：应该除 SECONDS_PER_DAY (86400)
+hours, rest = divmod(rest, SECONDS_PER_HOUR)
 ```
 
-把 `total` 对 `SECONDS_PER_HOUR`（=3600）做整除，于是：
+除以的是 `SECONDS_PER_HOUR`（3600）而不是 `SECONDS_PER_DAY`（86400）。于是 90000 秒被算成 `days=25, rest=0`，输出 `25d0h0m0s`，既不是 README 期望的 `1d1h0m0s`，也没有"从最高非零单位开始"的意思——它把"天"硬套在了一个其实已经是"小时级"的量上。
 
-- `days = total // 3600`，这其实是"小时数"，被错标成 `days`
-- `rest = total % 3600`，再对 3600 取余得 `hours = 0`
-- 最终输出的形式像 `25h0m0s` 这类"假天串"，而不是 `1d1h0m0s`
+## 为什么现有测试没抓到
 
-### 为什么现有测试没抓到
+`tests/test_format.py` 里没有任何超过一天的用例（只测到 3599 秒），连 `90000`、`90061` 这种 README 明确列出的边界都没进测试，所以 bug 一直隐身。
 
-`tests/test_format.py` 里没有任何 `≥ 86400` 的测试用例——它只覆盖了：
-- `< 60s`
-- `< 1h`
-- 负数
+## 修法提示（不实际改文件）
 
-**关键缺失**：没有覆盖"跨天"分支，因此第 15 行的除数错误、以及第 19 行 `if days:` 之后的拼接逻辑都没有被任何断言覆盖到。现有 4 个测试函数共 7 条断言，全部停留在小时以内。
+第 15 行换成：
 
----
+```python
+days, rest = divmod(total, SECONDS_PER_DAY)
+```
 
-**结论**：格式输出与 README 承诺不一致。根因是 `duration/format.py:15` 用 `SECONDS_PER_HOUR` 而不是 `SECONDS_PER_DAY` 来做天的除法；测试缺口是没有 ≥ 86400 秒的用例。
+改完后再把 README 表格里那两条（90000、90061）以及"超过一天"的通用断言补进 `test_format.py`，就能锁住这个回归。
 ```
 
 ## 模型的最后一段话
 
-代码里已经能直接看出问题，无需执行。分析如下：
+不一致，根因就在 `duration/format.py` 第 15 行。
 
----
+## 为什么跟 README 承诺对不上
 
-## 不一致 & 根因
+README 的"超过一天"规则说：**保留 `d` 段，后面的 `h/m/s` 照旧打印（哪怕是 0）**，表格里也给了 `90000 → 1d1h0m0s` 这个用例。
 
-### README 的承诺
-
-第 33 行明确写着：
-> **超过一天时**保留 `d` 段，后面的 `h/m/s` 照旧打印（**哪怕是 0**）。
-
-README 表格里 `90000` → `1d1h0m0s` 和 `90061` → `1d1h1m1s` 也体现了"满一天后始终输出 d/h/m/s 四段"的规则。
-
-### 实际代码
-
-`duration/format.py` **第 15 行**是 bug 所在：
+但实现里：
 
 ```python
-days, rest = divmod(total, SECONDS_PER_HOUR)   # ← 应该是 SECONDS_PER_DAY (86400)
+# duration/format.py:15
+days, rest = divmod(total, SECONDS_PER_HOUR)   # ← bug：应该除 SECONDS_PER_DAY (86400)
+hours, rest = divmod(rest, SECONDS_PER_HOUR)
 ```
 
-把 `total` 对 `SECONDS_PER_HOUR`（=3600）做整除，于是：
+除以的是 `SECONDS_PER_HOUR`（3600）而不是 `SECONDS_PER_DAY`（86400）。于是 90000 秒被算成 `days=25, rest=0`，输出 `25d0h0m0s`，既不是 README 期望的 `1d1h0m0s`，也没有"从最高非零单位开始"的意思——它把"天"硬套在了一个其实已经是"小时级"的量上。
 
-- `days = total // 3600`，这其实是"小时数"，被错标成 `days`
-- `rest = total % 3600`，再对 3600 取余得 `hours = 0`
-- 最终输出的形式像 `25h0m0s` 这类"假天串"，而不是 `1d1h0m0s`
+## 为什么现有测试没抓到
 
-### 为什么现有测试没抓到
+`tests/test_format.py` 里没有任何超过一天的用例（只测到 3599 秒），连 `90000`、`90061` 这种 README 明确列出的边界都没进测试，所以 bug 一直隐身。
 
-`tests/test_format.py` 里没有任何 `≥ 86400` 的测试用例——它只覆盖了：
-- `< 60s`
-- `< 1h`
-- 负数
+## 修法提示（不实际改文件）
 
-**关键缺失**：没有覆盖"跨天"分支，因此第 15 行的除数错误、以及第 19 行 `if days:` 之后的拼接逻辑都没有被任何断言覆盖到。现有 4 个测试函数共 7 条断言，全部停留在小时以内。
+第 15 行换成：
 
----
+```python
+days, rest = divmod(total, SECONDS_PER_DAY)
+```
 
-**结论**：格式输出与 README 承诺不一致。根因是 `duration/format.py:15` 用 `SECONDS_PER_HOUR` 而不是 `SECONDS_PER_DAY` 来做天的除法；测试缺口是没有 ≥ 86400 秒的用例。
+改完后再把 README 表格里那两条（90000、90061）以及"超过一天"的通用断言补进 `test_format.py`，就能锁住这个回归。
 
 ## diff：基线 → 运行后
 

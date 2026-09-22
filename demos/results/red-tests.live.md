@@ -9,12 +9,14 @@
 | repo/baseline | `demos/fixtures/red-tests` · baseline `be97c63545dc`（8 个文件） |
 | expected | pytest 退出码 0；tests/ 逐字节未变；结算数值经独立脚本校验 |
 | actual | `completed` · 判定 PASS（4/4） |
-| turns / tokens | 6 轮 / 33,283 tokens |
-| tool_calls | 10 次，其中 is_error 0 次（0%） |
-| 工具序列 | bash → read_file → read_file → read_file → read_file → read_file → edit_file → run_tests → edit_file → run_tests |
-| redundant / denied | 0 / 0 |
+| turns / tokens | 6 轮 / 36,041 tokens |
+| tool_calls | 13 次，其中 is_error 0 次（0%） |
+| 工具序列 | read_file → read_file → read_file → read_file → read_file → read_file → read_file → read_file → run_tests → read_file → edit_file → edit_file → run_tests |
+| denied / repeated / stalled | 0 次被拒 · 0 次逐调用重复 · 0 轮整组重演 |
+| 失败模式 | context_growth |
+| 上下文峰值 | 7,542 tokens |
 | 权限模式 | `auto`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |
-| wall time | 15.0s |
+| wall time | 31.9s |
 | trace | `demos/traces/red-tests.live.jsonl` |
 | 工作副本 | `demos/.work/red-tests`（判定就在这个目录跑） |
 
@@ -32,34 +34,37 @@
 ## 终端输出（原样）
 
 ```text
-✓ bash        cd "D:\Embodied Agent\Agent-JD\mini-claude-code\demos\.work\red-tes…  766ms
-✓ read_file   cart/__init__.py  1ms
-✓ read_file   cart/pricing.py  1ms
-✓ read_file   cart/report.py  1ms
-✓ read_file   tests/test_checkout.py  1ms
-✓ read_file   README.md  2ms
-✓ edit_file   cart/pricing.py  1ms
-✓ run_tests     851ms
-✓ edit_file   cart/pricing.py  1ms
-✓ run_tests     910ms
+✓ read_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/R…  3ms
+✓ read_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/c…  2ms
+✓ read_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/c…  2ms
+✓ read_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/c…  3ms
+✓ read_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/c…  4ms
+✓ read_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/t…  2ms
+✓ read_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/t…  2ms
+✓ read_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/t…  2ms
+✓ run_tests   extra_args=['-v', '--tb=short'] timeout=60  1.2s
+✓ read_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/c…  1ms
+两个 bugs in `cart/pricing.py`:
+
+1. **Line 11**: `COUPONS` 中 `BULK10` 值是 `0.01`（1%），应为 `0.10`（10%）
+2. **Line 86**: 税的计算用的是 `subtotal * TAX_RATE`（折扣前），应为 `taxable_amount(subtotal, discount) * TAX_RATE`（折扣后）
+✓ edit_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/c…  4ms
+✓ edit_file   D:/Embodied Agent/Agent-JD/mini-claude-code/demos/.work/red-tests/c…  3ms
+✓ run_tests   extra_args=['-v', '--tb=short'] timeout=60  1.3s
 全部 17 个测试通过。
 
-**问题与修复：**
-1. `COUPONS` 中 `BULK10` 的值错误地设置为 `0.01`（1%），应为 `0.1`（10%）。
-2. `checkout()` 函数中税费计算错误地使用了 `subtotal * TAX_RATE`，应改为基于折扣后金额计算：`taxable_amount(subtotal, discount) * TAX_RATE`。
-
-两处都在 `cart/pricing.py`，现在已修正，测试全绿。
+**修复了两处 bug（`cart/pricing.py`）：**
+1. `BULK10` 优惠券比例从 `0.01`（1%）改为 `0.10`（10%）
+2. `checkout()` 中税额改为按折扣后的金额计算：`taxable_amount(subtotal, discount) * TAX_RATE`，而非折扣前
 ```
 
 ## 模型的最后一段话
 
 全部 17 个测试通过。
 
-**问题与修复：**
-1. `COUPONS` 中 `BULK10` 的值错误地设置为 `0.01`（1%），应为 `0.1`（10%）。
-2. `checkout()` 函数中税费计算错误地使用了 `subtotal * TAX_RATE`，应改为基于折扣后金额计算：`taxable_amount(subtotal, discount) * TAX_RATE`。
-
-两处都在 `cart/pricing.py`，现在已修正，测试全绿。
+**修复了两处 bug（`cart/pricing.py`）：**
+1. `BULK10` 优惠券比例从 `0.01`（1%）改为 `0.10`（10%）
+2. `checkout()` 中税额改为按折扣后的金额计算：`taxable_amount(subtotal, discount) * TAX_RATE`，而非折扣前
 
 ## diff：基线 → 运行后
 
@@ -70,7 +75,7 @@
  FREE_SHIPPING_FROM = 100.00
  
 -COUPONS = {"BULK10": 0.01, "WELCOME": 0.05}
-+COUPONS = {"BULK10": 0.1, "WELCOME": 0.05}
++COUPONS = {"BULK10": 0.10, "WELCOME": 0.05}
  
  
 @@ -84,5 +84,5 @@

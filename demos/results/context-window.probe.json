@@ -1,0 +1,21 @@
+{
+  "model": "agnes-2.5-flash",
+  "base_url": "https://api.agnes-ai.cn/v1",
+  "chars_per_token_measured": 3.25,
+  "calibration_cost_note": "校准请求本身 prompt 约 8000 字符，成本可忽略",
+  "first_probe": {
+    "target_tokens": 262144,
+    "status": 200,
+    "prompt_tokens": 270570,
+    "body": "{\"id\":\"e02dbaeed4d64c76945a3f72078f4369\",\"created\":1790035525,\"model\":\"agnes-2.5-flash\",\"object\":\"chat.completion\",\"choices\":[{\"finish_reason\":\"length\",\"index\":0,\"message\":{\"content\":\"OK\",\"role\":\"assistant\"},\"provider_specific_fields\":{\"matched_stop\":null}}],\"usage\":{\"completion_tokens\":1,\"prompt_to"
+  },
+  "limit_from_error": null,
+  "method": "single_probe_succeeded",
+  "tokens_spent_estimate": 270570,
+  "lower_bound_known_good": 270570,
+  "upper_bound_known_bad": null,
+  "error_excerpt": null,
+  "window_conclusion": ">= 270570",
+  "token_budget_current": 120000,
+  "verdict": "TOKEN_BUDGET 安全"
+}

@@ -10,9 +10,11 @@
 | expected | pytest 退出码 0；tests/ 逐字节未变；结算数值经独立脚本校验 |
 | actual | `completed` · 判定 PASS（4/4） |
 | turns / tokens | 10 轮 / 不适用（FakeLLM 不返回 usage） |
-| tool_calls | 9 次，其中 is_error 0 次（0%） |
+| tool_calls | 发起 9 次 · 执行 9 次，其中 is_error 0 次（0%） |
 | 工具序列 | write_todos → run_tests → search_text → read_file → edit_file → run_tests → edit_file → run_tests → write_todos |
-| redundant / denied | 0 / 0 |
+| denied / repeated / stalled | 0 次被拒 · 0 次逐调用重复 · 0 轮整组重演 |
+| 失败模式 | — |
+| 上下文峰值 | 0 tokens |
 | 权限模式 | `auto`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |
 | wall time | 3.1s |
 | trace | `demos/traces/red-tests.fake.jsonl` |
@@ -40,14 +42,14 @@
 先以退出码为准，看现在到底红在哪。
 ✓ run_tests     1.1s
 折扣是 1.25 而不是 12.5，等于少乘了 10 倍 —— 先找 BULK10 定义在哪。
-✓ search_text BULK10  3ms
+✓ search_text BULK10  11ms
 ✓ read_file   cart/pricing.py  1ms
 README 写的是 10% off，常量表里写成 0.01。改这里，不动断言。
 ✓ edit_file   cart/pricing.py  1ms
-✓ run_tests     1.0s
+✓ run_tests     984ms
 折扣修好后同一个用例继续失败：tax=10.00，期望 9.00。README 说税按折扣后金额计，而 checkout() 直接乘在小计上 —— 旁边那个 taxable_amount() 就是为这件事写的，只是没被调用。
 ✓ edit_file   cart/pricing.py  1ms
-✓ run_tests     972ms
+✓ run_tests     1.1s
 ✓ write_todos 3 步  0ms
 任务清单
   [x] 跑一遍测试，拿到失败清单

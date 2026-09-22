@@ -25,6 +25,14 @@ from miniclaude.agent.context import ContextManager
 from miniclaude.agent.permissions import PermissionGate
 from miniclaude.agent.planner import TodoList
 from miniclaude.agent.state import AgentResult, AgentState, TerminationReason
+from miniclaude.infra.failure import (
+    CallFact,
+    RunFacts,
+    classify,
+    drops_assertions,
+    verdict_of,
+)
+from miniclaude.infra.trace import new_span_id, prompt_hash
 from miniclaude.llm.base import LLMClient
 from miniclaude.llm.openai_compat import LLMError
 from miniclaude.messages import Message, Role, StopReason, ToolResultBlock
@@ -35,6 +43,7 @@ STALL_LIMIT = 3
 EMPTY_REPLY_RETRIES = 2
 REJECTION_STOP = 2
 MAX_OUTPUT_CHARS = 30_000
+PREFIX_SAMPLE_CHARS = 2000
 
 
 class EventKind(StrEnum):
@@ -76,6 +85,7 @@ class Agent:
         todos: TodoList | None = None,
         on_event: EventHandler | None = None,
         tracer: Any = None,
+        price_per_mtokens: float = 0.0,
     ) -> None:
         self.llm = llm
         self.registry = registry
@@ -87,9 +97,17 @@ class Agent:
         self.todos = todos or TodoList()
         self.on_event = on_event
         self.tracer = tracer
+        self.price_per_mtokens = price_per_mtokens
         self.messages: list[Message] = []
         self.state = AgentState()
         self._last_error = ""
+        self._run_span = ""
+        self._turn_span = ""
+        self._run_started = 0.0
+        self._call_facts: list[CallFact] = []
+        self._est_tokens: list[int] = []
+        self._output_by_turn: dict[int, int] = {}
+        self._last_call_key: tuple[str, str] | None = None
 
     # --------------------------------------------------------------- 公共
 
@@ -97,6 +115,10 @@ class Agent:
         self.messages.clear()
         self.state = AgentState()
         self.todos.items.clear()
+        self._call_facts = []
+        self._est_tokens = []
+        self._output_by_turn = {}
+        self._last_call_key = None
 
     def cancel(self) -> AgentResult:
         """用户在半途中断（Ctrl-C）时由 CLI 调用。
@@ -110,12 +132,29 @@ class Agent:
         """本轮实际会发出去的 system 文本，供 /context 和测试读取。"""
         return self._system()
 
-    def run(self, user_input: str) -> AgentResult:
-        """处理一条用户请求，返回最终答复与全部计数。"""
+    def run(self, user_input: str, *, task_id: str | None = None) -> AgentResult:
+        """处理一条用户请求，返回最终答复与全部计数。
+
+        `task_id` 由 eval 层传入（同一个 Agent 在批跑里逐个任务复用），
+        人肉使用时留空即可 —— 报表按 run_id 聚合，不按 task_id。
+        """
         self.messages.append(Message.user_text(user_input))
         self.state = AgentState()
         self._last_error = ""
-        self._trace("run_start", user_input_chars=len(user_input))
+        self._run_span = new_span_id()
+        self._turn_span = self._run_span
+        self._run_started = time.perf_counter()
+        self._call_facts = []
+        self._est_tokens = []
+        self._output_by_turn = {}
+        self._last_call_key = None
+        self._trace(
+            "run_start",
+            span_id=self._run_span,
+            run_id=self._run_span,
+            task_id=task_id,
+            user_input_chars=len(user_input),
+        )
 
         stall_signature: str | None = None
         stall_count = 0
@@ -132,22 +171,51 @@ class Agent:
             self.state.turn += 1
             system = self._system()
             specs = self.registry.specs()
+            sent_chars = self.context.wire_chars(system=system, tools=specs, messages=self.messages)
+            est_tokens = self.context.estimate_from_chars(sent_chars)
+            pressure = self.context.pressure_from_chars(sent_chars)
+            self._est_tokens.append(est_tokens)
 
-            if self.context.should_stop(system=system, tools=specs, messages=self.messages):
+            if pressure >= self.context.stop_pressure:
                 self._emit(EventKind.ERROR, message="上下文已接近预算上限，主动停止以避免请求被端点拒绝。")
                 return self._finish(TerminationReason.CONTEXT_OVERFLOW)
-            if self.context.should_warn(system=system, tools=specs, messages=self.messages):
+            if pressure >= self.context.warn_pressure:
                 self._emit(EventKind.WARNING, message="上下文使用率超过 80%，建议尽快收尾或缩小任务范围。")
 
-            self._trace("turn_start", turn=self.state.turn, message_count=len(self.messages))
+            self._turn_span = new_span_id()
+            self._trace(
+                "turn_start",
+                span_id=self._turn_span,
+                parent_span_id=self._run_span,
+                turn=self.state.turn,
+                message_count=len(self.messages),
+                est_tokens=est_tokens,
+            )
             self._emit(EventKind.TURN_START, turn=self.state.turn)
-            sent_chars = self.context.wire_chars(system=system, tools=specs, messages=self.messages)
+            self._trace(
+                "llm_request",
+                span_id=self._turn_span,
+                parent_span_id=self._run_span,
+                turn=self.state.turn,
+                message_count=len(self.messages),
+                tools_count=len(specs),
+                est_tokens=est_tokens,
+                prefix_hash=prompt_hash(system + self.messages[0].text()[:PREFIX_SAMPLE_CHARS]),
+            )
+            requested = time.perf_counter()
 
             try:
                 response = self.llm.create(system=system, messages=self.messages, tools=specs)
             except LLMError as exc:
                 self._last_error = str(exc)
-                self._trace("error", layer="llm", message=str(exc)[:500])
+                self._trace(
+                    "error",
+                    span_id=self._turn_span,
+                    parent_span_id=self._run_span,
+                    turn=self.state.turn,
+                    layer="llm",
+                    message=str(exc)[:500],
+                )
                 self._emit(EventKind.ERROR, message=str(exc))
                 return self._finish(TerminationReason.LLM_FAILURE)
 
@@ -157,10 +225,13 @@ class Agent:
             self.messages.append(response.as_message())
             self._trace(
                 "llm_response",
+                span_id=self._turn_span,
+                parent_span_id=self._run_span,
                 turn=self.state.turn,
                 stop_reason=response.stop_reason.value,
                 blocks=[type(block).__name__ for block in response.blocks],
                 usage={"prompt": response.usage.prompt_tokens, "completion": response.usage.completion_tokens},
+                latency=round(time.perf_counter() - requested, 3),
             )
 
             if text := response.text().strip():
@@ -189,7 +260,12 @@ class Agent:
 
             empty_replies = 0
             signature = _signature(calls)
-            stall_count = stall_count + 1 if signature == stall_signature else 1
+            if signature == stall_signature:
+                # 整组重复 —— 与下面 repeated_calls 的"逐调用同名同参"是两个口径，别混
+                self.state.stalled_groups += 1
+                stall_count += 1
+            else:
+                stall_count = 1
             stall_signature = signature
             if stall_count >= STALL_LIMIT:
                 self._emit(
@@ -216,18 +292,43 @@ class Agent:
         executed_any = False
 
         for call in calls:
+            call_span = new_span_id()
+            args = call.input if isinstance(call.input, dict) else {}
             tool = self.registry.get(call.name)
+            elapsed = 0.0
             if tool is None:
                 result = ToolResult.err(
                     f"没有名为 {call.name!r} 的工具。可用工具：{', '.join(self.registry.names())}。"
                     "请勿虚构工具名。"
                 )
+                risk, executed = "unknown", False
+                # 虚构工具名也是一次"没能执行的发起"。不落 permission 记录，离线侧
+                # 就看不见这条调用，权限占比的分母会和实时算的对不上。
+                self._trace(
+                    "permission",
+                    span_id=call_span,
+                    parent_span_id=self._turn_span,
+                    turn=self.state.turn,
+                    tool=call.name,
+                    decision="deny",
+                    rule_hit="unknown-tool",
+                )
             else:
+                risk = tool.risk_level.value
                 allowed, reason = self.gate.authorize(tool, call.input)
-                self._trace("permission", turn=self.state.turn, tool=call.name, decision=reason)
+                self._trace(
+                    "permission",
+                    span_id=call_span,
+                    parent_span_id=self._turn_span,
+                    turn=self.state.turn,
+                    tool=call.name,
+                    decision="allow" if allowed else "deny",
+                    rule_hit=reason,
+                )
                 self._emit(EventKind.PERMISSION, tool=call.name, allowed=allowed, reason=reason, call=call)
                 if allowed:
                     executed_any = True
+                    executed = True
                     self._emit(EventKind.TOOL_START, tool=call.name, args=call.input)
                     started = time.perf_counter()
                     result = tool.invoke(call)
@@ -239,25 +340,59 @@ class Agent:
                         elapsed=elapsed,
                         output=result.content,
                     )
-                    self._trace(
-                        "tool_call",
-                        turn=self.state.turn,
-                        name=call.name,
-                        args=_digest(call.input),
-                        ok=not result.is_error,
-                        output_chars=len(result.content),
-                        latency=round(elapsed, 3),
-                    )
                 else:
+                    executed = False
                     self.state.denied_actions += 1
                     result = ToolResult.err(
                         f"用户拒绝执行 {call.name}（{reason}）。"
                         "请不要重复同样的请求；可以改用只读手段继续，或向用户说明你需要什么权限后收尾。"
                     )
 
+            ok = not result.is_error
             self.state.tool_calls += 1
-            if result.is_error:
+            key = (call.name, _key_of(args))
+            if key == self._last_call_key:
+                self.state.repeated_calls += 1
+            self._last_call_key = key
+            if not ok:
                 self.state.tool_errors += 1
+
+            # 派生结论只在这里算一次，实时分类与落盘的记录因此共用同一份定义。
+            verdict = verdict_of(call.name, result.content) if executed else None
+            gaming = executed and drops_assertions(call.name, args)
+            self._call_facts.append(
+                CallFact(
+                    turn=self.state.turn,
+                    name=call.name,
+                    ok=ok,
+                    args=args,
+                    verdict=verdict,
+                    executed=executed,
+                    drops_assert=gaming,
+                )
+            )
+            if executed:
+                # 与落盘的 output_chars 同一个数：两侧算的是同一件事，`context_growth`
+                # 的实时判定和 `mcc trace` 的事后判定才不会各说各话。
+                self._output_by_turn[self.state.turn] = self._output_by_turn.get(self.state.turn, 0) + len(
+                    result.content
+                )
+                self._trace(
+                    "tool_call",
+                    span_id=call_span,
+                    parent_span_id=self._turn_span,
+                    turn=self.state.turn,
+                    name=call.name,
+                    tool_use_id=call.id,
+                    risk=risk,
+                    args=_digest(call.input),
+                    ok=ok,
+                    output_chars=len(result.content),
+                    latency=round(elapsed, 3),
+                    verdict=verdict,
+                    drops_assert=gaming,
+                )
+
             results.append(
                 ToolResultBlock(
                     tool_use_id=call.id,
@@ -286,6 +421,10 @@ class Agent:
     def _finish(self, reason: TerminationReason) -> AgentResult:
         text = self._closing_text(reason)
         self.state.status = "finished" if reason is TerminationReason.COMPLETED else "aborted"
+        facts = self._facts(reason)
+        findings = classify(facts)
+        modes = [found.mode.value for found in findings]
+        cost = self._cost_est()
         result = AgentResult(
             text=text,
             termination=reason,
@@ -293,10 +432,51 @@ class Agent:
             state=self.state,
             todos=self.todos.snapshot(),
             trace_path=getattr(self.tracer, "path", None),
+            failure_modes=modes,
+            cost_est=cost,
         )
-        self._trace("run_end", termination=reason.value, **self.state.snapshot())
+        for found in findings:  # 标签之外还要留下证据：哪一轮、哪个调用、为什么这么判
+            self._trace(
+                "failure_mode",
+                turn=found.turn or 0,
+                mode=found.mode.value,
+                why=found.why,
+                prescription=found.prescription,
+            )
+        # run_end 必须是这次 run 的最后一条记录：S13 的 durable 续跑靠它判断"这轮跑完了"
+        self._trace(
+            "run_end",
+            span_id=self._run_span or None,
+            termination=reason.value,
+            failure_modes=modes,
+            cost_est=cost,
+            wall_ms=int((time.perf_counter() - self._run_started) * 1000) if self._run_started else 0,
+            todos=self.todos.snapshot(),
+            **self.state.snapshot(),
+        )
         self._emit(EventKind.FINISHED, termination=reason.value, summary=result.summary_line())
         return result
+
+    def _facts(self, reason: TerminationReason) -> RunFacts:
+        todos = self.todos.snapshot()
+        return RunFacts(
+            termination=reason.value,
+            calls=list(self._call_facts),
+            est_tokens=list(self._est_tokens),
+            turn_output_chars=[self._output_by_turn.get(turn, 0) for turn in range(1, self.state.turn + 1)],
+            turns=self.state.turn,
+            repeated_calls=self.state.repeated_calls,
+            stalled_groups=self.state.stalled_groups,
+            denied_actions=self.state.denied_actions,
+            todos_total=len(todos),
+            todos_open=sum(1 for item in todos if item.get("status") not in {"done", "cancelled"}),
+        )
+
+    def _cost_est(self) -> float | None:
+        """单价未知就报 null，不报 0 —— "没有成本"和"不知道成本"是两回事。"""
+        if self.price_per_mtokens <= 0:
+            return None
+        return round(self.state.usage.total / 1_000_000 * self.price_per_mtokens, 4)
 
     def _closing_text(self, reason: TerminationReason) -> str:
         """非正常结束时，也要给用户一段能说清"停在哪、为什么、下一步怎么办"的话。"""
@@ -343,6 +523,12 @@ def _signature(calls: list[Any]) -> str:
         sorted((call.name, json.dumps(_plain(call.input), sort_keys=True, ensure_ascii=False)) for call in calls),
         ensure_ascii=False,
     )
+
+
+def _key_of(args: Any) -> str:
+    """单个调用的规范化参数。与 `_signature` 的区别就是两个指标的区别：
+    `repeated_calls` 问"这一次和上一次是否同名同参"，`stalled_groups` 问"整组是否重演"。"""
+    return json.dumps(_plain(args), sort_keys=True, ensure_ascii=False)
 
 
 def _plain(value: Any) -> Any:
