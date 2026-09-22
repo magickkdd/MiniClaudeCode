@@ -16,7 +16,7 @@
 | 失败模式 | — |
 | 上下文峰值 | 0 tokens |
 | 权限模式 | `auto`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |
-| wall time | 3.1s |
+| wall time | 10.3s |
 | trace | `demos/traces/red-tests.fake.jsonl` |
 | 工作副本 | `demos/.work/red-tests`（判定就在这个目录跑） |
 
@@ -40,17 +40,17 @@
   [ ] 定位失败断言对应的代码
   [ ] 改代码（不动 tests/）并重跑到全绿
 先以退出码为准，看现在到底红在哪。
-✓ run_tests     1.1s
+✓ run_tests     3.4s
 折扣是 1.25 而不是 12.5，等于少乘了 10 倍 —— 先找 BULK10 定义在哪。
-✓ search_text BULK10  11ms
-✓ read_file   cart/pricing.py  1ms
+✓ search_text BULK10  18ms
+✓ read_file   cart/pricing.py  3ms
 README 写的是 10% off，常量表里写成 0.01。改这里，不动断言。
-✓ edit_file   cart/pricing.py  1ms
-✓ run_tests     984ms
+✓ edit_file   cart/pricing.py  2ms
+✓ run_tests     3.1s
 折扣修好后同一个用例继续失败：tax=10.00，期望 9.00。README 说税按折扣后金额计，而 checkout() 直接乘在小计上 —— 旁边那个 taxable_amount() 就是为这件事写的，只是没被调用。
-✓ edit_file   cart/pricing.py  1ms
-✓ run_tests     1.1s
-✓ write_todos 3 步  0ms
+✓ edit_file   cart/pricing.py  5ms
+✓ run_tests     2.4s
+✓ write_todos 3 步  1ms
 任务清单
   [x] 跑一遍测试，拿到失败清单
   [x] 定位失败断言对应的代码

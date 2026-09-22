@@ -24,7 +24,7 @@ from miniclaude.agent.permissions import Answer, PermissionMode
 from miniclaude.agent.state import AgentResult
 from miniclaude.cli.main import build_session
 from miniclaude.cli.render import Renderer
-from miniclaude.config import Config
+from miniclaude.config import BACKEND_NAMES, Config
 from miniclaude.eval import drivers, judge as judge_mod, regression
 from miniclaude.eval.contract import Context, isolate
 from miniclaude.eval.metrics import per_tag, summarize_batch
@@ -156,6 +156,8 @@ class EvalRunner:
         context_hard_limit: int | None = None,
         repo_map: bool | None = None,
         repo_map_tokens: int | None = None,
+        backend: str | None = None,
+        checkpoints: bool | None = None,
     ) -> None:
         if engine not in ("live", "fake"):
             raise ValueError(f"engine 只能是 live/fake，收到 {engine!r}")
@@ -181,12 +183,19 @@ class EvalRunner:
         self.context_hard_limit = context_hard_limit
         self.repo_map = repo_map
         self.repo_map_tokens = repo_map_tokens
+        self.backend = backend
+        self.checkpoints = checkpoints
+        self._base_config: Config | None = None
         if context_budget is not None and context_budget < 1:
             raise ValueError("context_budget 至少 1；要让阶梯不生效请用 context_compact=False")
         if context_hard_limit is not None and context_hard_limit < 1:
             raise ValueError("context_hard_limit 至少 1；要关掉止损闸门请抬高它，别设 0")
         if repo_map_tokens is not None and repo_map_tokens < 1:
             raise ValueError("repo_map_tokens 至少 1；要让地图完全不上身请用 repo_map=False（B3 的对照臂）")
+        if backend is not None and backend not in BACKEND_NAMES:
+            # B6 的两臂是按后端名点名的，打错一个字母就变成"两臂都是 local"，
+            # 而报表会把它读成"两个后端判定一致"。
+            raise ValueError(f"backend 只能是 {' / '.join(BACKEND_NAMES)}，收到 {backend!r}")
         self.spent_tokens = 0
         self.aborted = False
         self.manifest = self.out / "manifest.jsonl"
@@ -245,7 +254,10 @@ class EvalRunner:
 
     def run_task(self, task: TaskInstance, repeat: int) -> RunRecord:
         baseline = task.source.resolve(self.tasks.repo_root)
-        workdir = isolate(baseline, self.out / "work" / f"{task.id}.r{repeat}")
+        # 记忆目录名要在复制之前就知道：`isolate` 排除它，判定也排除它，两处必须是同一个
+        # 名字 —— 否则 `MEMORY_DIR` 一改，派生缓存就变成"模型改了源码"。
+        memory_dir = self.base_config().memory_dir
+        workdir = isolate(baseline, self.out / "work" / f"{task.id}.r{repeat}", memory_dir=memory_dir)
         trace = self.out / "traces" / f"{task.id}.r{repeat}.{self.engine}.jsonl"
         trace.unlink(missing_ok=True)
 
@@ -277,7 +289,14 @@ class EvalRunner:
             return record
 
         wall_ms = int((time.perf_counter() - started) * 1000)
-        ctx = Context(engine=self.engine, workdir=workdir, baseline=baseline, result=result, console=lines)
+        ctx = Context(
+            engine=self.engine,
+            workdir=workdir,
+            baseline=baseline,
+            result=result,
+            console=lines,
+            memory_dir=memory_dir,
+        )
         judgement = judge_mod.judge(task, ctx)
         stats = summarize(trace) if trace.exists() else {}
         record = RunRecord(
@@ -337,17 +356,28 @@ class EvalRunner:
             handle.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
             handle.flush()
 
-    def config_for(self, task: TaskInstance, workdir: Path, trace: Path) -> Config:
-        base = self.config or (
-            Config.from_env(self.tasks.repo_root / ".env")
-            if self.engine == "live"
-            else Config(
-                base_url="http://fake.invalid/v1",
-                api_key="sk-fake-not-a-real-key-000000",
-                model="fake-llm(scripted)",
-                project_root=self.tasks.repo_root,
+    def base_config(self) -> Config:
+        """跑批这一臂的基配置（还没按任务改写 project_root / max_turns 的那一份）。
+
+        缓存是必要的，不是为了省时间：`run_task` 在**复制工作副本之前**就要知道记忆目录
+        叫什么（`isolate` 得把它排除掉，否则上一次跑批留下的缓存会被判成"改动了源码"），
+        而这个答案只有 Config 里有。不缓存就是每个任务读两遍 `.env`。
+        """
+        if self._base_config is None:
+            self._base_config = self.config or (
+                Config.from_env(self.tasks.repo_root / ".env")
+                if self.engine == "live"
+                else Config(
+                    base_url="http://fake.invalid/v1",
+                    api_key="sk-fake-not-a-real-key-000000",
+                    model="fake-llm(scripted)",
+                    project_root=self.tasks.repo_root,
+                )
             )
-        )
+        return self._base_config
+
+    def config_for(self, task: TaskInstance, workdir: Path, trace: Path) -> Config:
+        base = self.base_config()
         # 只能从已有配置派生：`Config.redacted()` 会把 api_key 掩码，拿它重建一份
         # 就等于给真实引擎装上一把假钥匙 —— 那种失败会以"网络错误"的形式出现，
         # 排查起来完全看不出根因。
@@ -369,6 +399,10 @@ class EvalRunner:
             overrides["repo_map"] = self.repo_map
         if self.repo_map_tokens is not None:
             overrides["repo_map_tokens"] = self.repo_map_tokens
+        if self.backend is not None:
+            overrides["execution_backend"] = self.backend
+        if self.checkpoints is not None:
+            overrides["checkpoints"] = self.checkpoints
         return replace(
             base, project_root=workdir, trace_path=trace, max_turns=task.max_turns, **overrides
         )

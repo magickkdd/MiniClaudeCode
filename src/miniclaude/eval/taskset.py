@@ -25,7 +25,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
-from miniclaude.eval.contract import NOISE, tracked_files
+from miniclaude.eval.contract import noise_names, tracked_files
 
 SourceKind = Literal["vendored", "repo"]
 TerminationExpect = Literal["completed", "non_completed", "any"]
@@ -291,7 +291,10 @@ def content_sha(tasks_dir: Path, tasks: Sequence[TaskInstance], *, repo_root: Pa
 
 
 def _feed(digest, file: Path, *, base: Path) -> None:
-    if any(noise in file.parts for noise in NOISE):
+    # 用 `noise_names()` 而不是 `NOISE`：默认那四项是工具缓存，第五项（记忆目录）
+    # 是 agent 自己的派生物。任务集指纹不该因为谁在本机改过 `MEMORY_DIR` 而变 ——
+    # 这里要的只是"考卷内容没被人动过"。
+    if any(part in noise_names() for part in file.parts):
         return
     rel = file.relative_to(base).as_posix()
     digest.update(f"{rel}\0".encode("utf-8"))

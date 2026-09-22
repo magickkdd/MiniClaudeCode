@@ -4,7 +4,8 @@
 B4 前半 16 条轨迹人工核对退出码 0）· S9 ✅ **B1 达成**（24 题 × 3 次 fake 全批 `pass@1=20/24`、退出码 0、基线入库）·
 S10 ◐ **B2 完成一半**（12 条 fake 判据全绿；真端点那半条 2026-09-22 被 `HTTP 429` 打断，无结论，§3.3.3）·
 S11 ◐ **B3 未达成**（机制层 7/7 绿、因果层轮数 0%：一次有效的证伪，§3.4.2）·
-S12 ⛔ **动手前就被自己的数据砍进 Tier 3**（可并行的只读轮只值 0.011% 墙钟，§3.5.1）· **下一步 S13**（`ExecutionBackend` + durable + `MEMORY_DIR`，B6）
+S12 ⛔ **动手前就被自己的数据砍进 Tier 3**（可并行的只读轮只值 0.011% 墙钟，§3.5.1）·
+S13 ✅ **B6 判定层达成、沙箱层未测**（12/12 格一致 + 8 条前提全绿，但本机无 docker、替身跑在宿主上，§3.6.2）· **下一步 S14**（§3.7 MCP bridge + Skills，D19/D20）
 基线：`main @ 6a73e32`（v1.0 已交付并推送 `magickkdd/MiniClaudeCode`）
 预算：89 净工时（Tier 1/2/3 = 40+25+15 = 80h，缓冲 9h；每天 4h ≈ 22 天）· 交付物：可无人值守批跑的评测体系 + 六项能力升级 + 回归基线
 关系：本文只写**增量**。SPEC v1.0 未被本文推翻的条款全部继续有效；两处勘误见 §0.3。
@@ -145,7 +146,7 @@ B1 是 v2 的生死线，其余五条都建立在它的输出上。**v1 的 A1�
 | **B3** | 同一任务集，`RepoMap on` vs `off` 的配对比较 | A1 类任务 `steps_to_success` 中位数下降 **≥ 20%**，且 `context_peak` p95 上升 **≤ 15%**（map 自身字符计入估算）；两条同时成立才算数 → **实到 2026-09-22：未达成。第二句 ✓（+5.4%），第一句 ✗（6.0→6.0，降 0%）。36 次真模型运行、机制层 7/7 全绿，所以结论是"效应不存在"而不是"实验没做成"；线不动，重测计划见 §7.3-5。全表与逐题配对见 §3.4.2** |
 | **B4** | 给 3 条真实失败轨迹，`mcc trace` 说清失败模式 | 输出的模式标签与人工判读一致（人工核对表进仓库）；渲染耗时 < 60s |
 | **B5** | 只读并发不改变语义 | 墙钟 p50 下降 **≥ 15%**；**零**次"同一 ASK 问两遍或漏问"；回填顺序与 `tool_calls` 声明顺序逐位一致（测试钉）；trace 无交错坏行 → **实到 2026-09-22：未排期。** 动手前先测（§3.5.1）：46 次 live 运行、261 个工具轮，按线程池无限大的上界只值 **162ms = 运行墙钟的 0.011%（p50 0.009%）**，与 15% 差三个数量级；fake 引擎（工具即 99.4% 墙钟）也只到 p50 0.127%。按 §3.5 自己的 <20% 砍单条款推入 Tier 3，**线保持原样不重述** |
-| **B6** | 同一任务在 local 与 docker backend 上判定一致 | 两后端各跑同一子集，`verdict` 与 `Check` 列表完全一致；docker 不可用时**明确降级并在报表标注**，不许静默换后端 |
+| **B6** | 同一任务在 local 与 docker backend 上判定一致 | 两后端各跑同一子集，`verdict` 与 `Check` 列表完全一致；docker 不可用时**明确降级并在报表标注**，不许静默换后端 → **实到 2026-09-22：达成（判定层），沙箱层未测。6 题 × 2 次 = 12 格，verdict / 终止原因 / `Check` 三元组 / 工具序列 12/12 全同，8 条前提全绿；但本机没有 docker，docker 臂用的是会真执行命令的替身，所以文件/网络隔离与镜像内容一次也没测过（`container_isolation_tested: false`）。全表与边界见 §3.6.2** |
 
 ## 1.4 决策记录（做了什么选择、放弃了什么）
 
@@ -311,7 +312,17 @@ def test_live_and_offline_classification_agree():
 | `todo_update` | turn, items[] |
 | `error` | turn, layer, message, **span_id**, **parent_span_id** |
 | `failure_mode` ★ | turn, **mode**, **why**, **prescription** |
+| `repo_map` ★S11 | turn, **modules_found**, **modules_parsed**, **unparsable**, **listed**, **omitted**, **chars**, **est_tokens**, **token_cap**, **focus[]**, **reasons{}**, **rebuilt**, **from_cache**, **note** |
+| `backend` ★S13 | turn=0, **requested**, **backend**, **isolated**, **shell**, **checkpoints**{enabled, ready, git_dir, snapshots, restores, failures, degraded, last_rev, excluded[]}, **degraded**, **note** |
+| `checkpoint` ★S13 | turn, **rev**, **tool**, **ok**, **backend**, **note**（`ok=false` 时 note 就是降级原因） |
+| `session_snapshot` ★S13 | turn, **ok**, **writes**, **done_calls**, **last_rev**, 失败时 **reason** |
+| `session_replay` ★S13 | turn, **name**, **tool_use_id**, **why**（重放**不**产生 `tool_call` 记录，见 §3.6.1） |
 | `run_end` | termination, state.snapshot()（含 **repeated_calls** / **stalled_groups**）, todos[], **failure_modes[]**, **cost_est**, **wall_ms**, **span_id** |
+
+`backend` 的字段集合是**快照里那份 = LocalBackend 交出来的形状**。`DockerBackend.stats()` 另外带
+`image / network / available / availability_reason / launches / errors` 六个键，而它**没有** `shell` ——
+两个后端的字段集本来就不相同，快照钉的是"被真实产地跑出来的那一支"，不是交集也不是并集。
+这不是漏钉：`isolated` 与 `degraded` 才是 B6 要跨臂对比的量，镜像名与启动次数只在单臂内有意义。
 
 两条落地时新增的口径，规格原文没写到、但必须记着：
 
@@ -321,9 +332,12 @@ def test_live_and_offline_classification_agree():
 2. **虚构工具名也要落一条 `permission(decision="deny", rule_hit="unknown-tool")`**。
    否则离线侧看不见这次发起，两个口径的差值在实时与事后两侧对不上（`test_live_and_offline_classification_agree` 会红）。
 
-留给后续 Stage、**尚未**出现在快照里的字段：`tool_call.parallel_group_id` 与
-`permission.ask_serialized`（S12 并发）、`context_op`（S10）、`checkpoint`（S13）。
-S10 落地 `context_op` 时的不变式：`pairing_ok` 为 `false` 的记录数**必须恒等于 0**。
+这段的实到状态（S13 落地后复核）：`checkpoint` 与 `backend`/`session_snapshot`/`session_replay`
+**已经进快照**（§3.6.1）；`context_op` 这个名字没有落地，S10 实际交出的两个 kind 是
+`context_compact` 与 `context_refuse`，而"`pairing_ok` 为 `false` 的记录数恒等于 0"这条不变式
+成立（B2 的 12 条判据里有它，`eval/results/b2-compact-ab.json`）；`tool_call.parallel_group_id`
+与 `permission.ask_serialized` **仍然没有产地** —— S12 被数据砍进 Tier 3（§3.5.1），
+所以这两个字段留着不钉：给一个不存在的实现预留字段形状，就是在文档里假装并发已经做完了。
 `error` 的 `kind` 字段并入 `layer`，不再单列。
 
 **字段命名对齐 OTel GenAI 语义约定**（`gen_ai.operation.name` / `gen_ai.tool.name` / `gen_ai.usage.input_tokens` 一类），落地方式：`infra/otel.py` 只做**导出映射**（`to_otel(record) -> span dict`），埋点代码不引入 OTel SDK。这样"能接入 Jaeger"是导出器的一层翻译，而不是全项目的架构前提。OTLP 实际导出放 Tier 3。
@@ -866,6 +880,101 @@ class SessionSnapshot:
 
 "Durable" 这个词在 PCG 那份 JD 里指的是长任务框架。我们的最小可用版本就是"**跑到一半被杀掉还能接着跑，且不重复已发生的写操作**"。不承诺 exactly-once（那需要后端事务），承诺 at-most-once 副作用 + 可审计现场。
 
+### 3.6.1 实到（S13 落地后补，2026-09-22）
+
+`backend/` 五个模块（`protocol` / `local` / `docker` / `checkpoints` / `factory`）+ `sessions.py`，
+S13 的测试合计 **115 例**（`test_sessions` 22 · `test_undo` 19 · `test_backend_factory` 18 ·
+`test_checkpoints` 15 · `test_memory_dir` 10 函数→15 例 · `test_docker_backend` 12 ·
+`test_resume` 14），全批 595 passed。
+
+**三处刻意不照抄规格，都是落地时规格自身说不通的地方：**
+
+| 规格写法 | 实到 | 为什么改 |
+|---|---|---|
+| `exec(command: str, ...)` | `command: Command = str \| Sequence[str]` | 字符串必须过 shell（`bash -c`，模型写的管道才有效），序列必须走 `execv`（参数里带空格的路径才不会被二次解释）。一个签名兜不住两件事，混着传就会把 `run_tests` 的 argv 拆坏。 |
+| `snapshot() -> str` | `-> tuple[str, str]`，`restore(rev) -> tuple[bool, str]` | 只返回 rev 的话，"这次没拍成"和"拍成了但 rev 是空串"在 trace 里长得一样。第二格是**原因串**（`NO_CHECKPOINT_REASON` 等），它直接进 `checkpoint` 事件的 `note`。 |
+| 每后端各自实现检查点 | 两臂共用**同一份**宿主侧 `Checkpointer` | 影子 git 的 work-tree 是宿主目录，容器里那份 `/work` 是同一个 bind mount。各存一份会出现"在 docker 臂 undo 回到 local 臂的某个状态"这种跨臂时间旅行。 |
+
+`LocalBackend` 的行为与 S13 之前逐字相同 —— 它必须继承 `os.environ`（否则找不到 python），
+这条由 `test_backend_factory` 钉住，而不是靠"我没改那几行"的回忆。
+
+**检查点**：`git --git-dir=<MEMORY_DIR>/snapshots --work-tree=<workspace>` 的独立索引，
+用户工作区里**不出现** `.git`（`test_checkpoints` 直接断言这一点）。每次 `write_file`/`edit_file`
+成功后一条 `checkpoint` 事件（`rev` / `tool` / `ok` / `backend`）；`/undo` = `restore(prev_rev)`，
+`/backend` 面板顺带列出栈深与降级原因。影子仓库建不起来时**降级而不是失败**：写工具照常成功，
+`checkpoint` 事件带着原因落盘，报表里 `checkpoints.degraded` 非空。
+
+**Durable 会话**：`SessionSnapshot` 的字段与规格一致（`done_call_ids` 是幂等的唯一依据）。
+`mcc resume [<id>|--latest]` / `--list` 三条路径都在，`--list` 每条带工作区 —— 共享
+`MEMORY_DIR` 或多份 clone 时，只有 session id 无法回答"这份现场是哪个仓库的"。
+
+现场恢复的形状必须写清楚，因为它是测试与实现最容易各说各话的地方：
+`restore_session` **只承认一种破损** —— 前缀消息全部配对、最后一条是声明了 tool_use 而
+零结果回填的助手消息。其余破损（中间断、结果多余、配对错乱）一律拒绝恢复，把坏现场留在
+文件里给人看。恢复时 `_dangling_batch()` 把未完成批次过一遍 `_run_tools`，
+`done_call_ids` 里的 id 直接跳过并回一句 `REPLAY_NOTE`，发 `session_replay` 事件、
+**不写** `tool_call` 记录、**不重复** `state.tool_calls` 计数。于是同一个数字在两处口径不同，
+这是刻意的：`run_end.tool_calls` 是**会话级**的账（跨进程续算），trace 文件里的 `tool_call`
+记录是**进程级**的观察（这个进程真执行了几次）。`test_resume` 里两条断言并排写着，
+免得后来人把差异当 bug 修掉。
+
+**MEMORY_DIR 收敛**：一个产地（`config.DEFAULTS["MEMORY_DIR"]` → `memory.MEMORY_DIRNAME`），
+七个消费者（MemoryStore、影子 git 的 `snapshots/`、`sessions/`、`Workspace.ignored_dirs`、
+RepoMap 遍历、eval 的 `noise_names`、`/backend` 面板文案）。S13-d 把它做成**可改的**并
+把七处全部串起来，因为"写盘目录与检索排除目录不是同一个"是自我强化回路的入口：地图读到
+`.mcc/` 里缓存的地图，几轮之后模型看到的是自己的输出被当成代码。改名成 `.brain` 之后
+七处一起跟上（`test_memory_dir` 15 例，含 `Config.from_env` 的首轮覆盖与
+`../outside` / `a/../../b` 这类敌对值的启动期拒绝）。
+
+### 3.6.2 B6 实测（`scripts/b6_backend_ab.py` → `eval/results/b6-backend-ab.json`，2026-09-22）
+
+B6 的字面要求：**同一任务在 local 与 docker 两个后端上判定结论一致。**
+这条比 B2/B3 便宜，而且便宜是有原因的：后端只改"命令在哪儿跑"，不改模型看到的任何东西
+（system、工具 schema、上下文全不变），所以 fake 引擎上的**判定分歧只可能是后端 bug** ——
+不像 B3 那样"fake 的 Δ 是我写的剧本的 Δ"。
+
+`tag=bugfix`（会真执行命令的 6 题）× repeats 2 × fake 引擎：
+
+| 项 | 实测 |
+|---|---|
+| 可比对格数 | 12 |
+| 判定一致 | **12 / 12（100%）** —— verdict、终止原因、**`Check` 列表的 `(label, ok, detail)` 三元组**、`(工具名, ok)` 逐格序列全同 |
+| 两臂判定 | 各 12 pass / 0 fail / 0 error，`pass@1` 6/6 |
+| 容器命令行构造次数 | 32 次 `run` + 12 次 `version` 探测 + 0 次超时清理 |
+| 前提检查 | **8 / 8 全绿**（含"docker 臂真的用上 docker""两臂同为 local 的假一致"拒绝） |
+| 墙钟 | local 42.5s · docker 46.5s（**这个数字不能读成容器启动开销**，见下） |
+
+argv 实证（替身日志原样抓的一条）：
+
+```
+docker run --rm --name mcc-8180c9acf36c --network none
+  -v <workspace>:/work -w /work -e PYTHONDONTWRITEBYTECODE=1
+  --entrypoint python3 python:3.12-slim -m pytest -q --no-header -rf --tb=short
+```
+
+宿主解释器 `D:\...\python.exe` 没有出现在任何一条容器命令里（`_translate()` 只在 **argv[0]**
+上换名，模型自己写的 `./venv/bin/python` 原样保留 —— 替它换解释器是篡改意图）。
+
+**这条线没测到什么**：这台开发机上没有 docker，替身是在宿主上执行命令的假 docker。
+所以被证明的是**命令行构造 + 降级判定 + rev 共用 + 两臂判定一致**，
+**没被证明的是文件隔离、网络隔离、镜像内容** —— 结果文件里 `container_isolation_tested: false`
+就是这一句话的机器可读版本。墙钟那 +4.0s 量的也是"多起一个本机 python 进程"，不是
+容器启动；真 docker 到位后原样重跑本脚本，届时才会第一次看到沙箱本身的代价。
+降级防线是脚本的**默认**行为：docker 臂实际用上 local 时整条脚本退 1、不产出一致率，
+只有显式 `--allow-degraded` 才允许把降级跑成一版报表 —— 两臂同为 local 的"100% 一致"
+是这场对照最省事的假结论，它必须是 opt-in 而不是默认。
+
+**这批判出来的三个缺陷**（都是先有测试/前提、后有修复，不是顺手重构）：
+
+1. `mcc resume --latest` 在零现场时 `IndexError` —— 用户敲的第一条恢复命令换来 traceback。
+2. `-v` 挂载路径按**第一个**冒号切，Windows 盘符 `D:` 当场把它切成空目录，于是"容器"在替身
+   自己的 cwd 里跑了整套仓库测试、超时、报出 `run_tests` 失败。表现完全像"两个后端结论不同"，
+   实际两臂跑的根本不是同一份代码。**B6 第一条分歧的证据是自己写的替身有 bug** ——
+   这条如果只比 verdict、不核 workdir，就会被记成"后端不一致"。前提清单里那条
+   "容器的工作目录就是这一题隔离出来的那份目录"是这次加的，加完就红了、修完才绿。
+3. `--list` 不报工作区（见上），以及 eval 的 `noise_names` 把 `.mcc` 写死 —— 改名后现场会被
+   当成题面的一部分参与哈希比对。
+
 ## 3.7 Extensibility — MCP bridge 与 Skills（S14，6h）
 
 ```python
@@ -1128,7 +1237,7 @@ v1 §6 全部继续有效（类型注解、frozen dataclass 优先、`StrEnum`�
 | Stage | 内容 | 工时 | 退出标准 |
 |---|---|---:|---|
 | ~~**12**~~ ⛔ | §3.5 只读并发（先由数据确认可并行轮占比） | 5h → **实际投入约 1h 测量后砍** | **B5**；7 项并发测试绿；若可并行轮 <20% 则整段推 Tier 3 → **实到（2026-09-22，`eval/results/s12-parallel-share.json`）**：轮占比合计 21.5% 过线、最新一层 b3-live 单独看 19.8% 差一线；第二道闸（B5 的墙钟 p50）实测上限 **0.011%**，与 15% 差三个数量级，fake 引擎也仅 0.127% → **整段推 Tier 3**，Tier 2 交付物改为只剩 B6。测法与读法见 §3.5.1 |
-| **13** | §3.6 `ExecutionBackend` + Docker + 快照/`/undo` + durable resume | 10h | **B6**；`mcc resume` 杀掉进程后续跑且不重放写操作 |
+| ~~**13**~~ ✅ | §3.6 `ExecutionBackend` + Docker + 快照/`/undo` + durable resume | 10h → **实到 2026-09-22** | **B6**；`mcc resume` 杀掉进程后续跑且不重放写操作 → **实到**：协议两实现 + 影子 git 检查点 + `/undo` + `mcc resume`/`--list`/`--latest` + `MEMORY_DIR` 七消费者收敛，S13 合计 **115 例测试**、全批 595 passed。B6 判定层 **12/12 格一致、8 条前提全绿**（`eval/results/b6-backend-ab.json`），沙箱层**未测**（本机无 docker，替身跑在宿主上）。签名三处改动与全部边界见 §3.6.1 / §3.6.2 |
 | **14** | §3.7 MCP bridge + Skills | 6h | 接一个真实 MCP server 跑通，6 项安全测试绿 |
 | — | A1 换成真实开源仓库（网络解禁后）+ 任务集扩到 30 | 4h | B1 在真仓库子集上重跑 |
 

@@ -6,15 +6,18 @@
 **is_error 语义**（与 run_tests 一致，评测指标依赖这条）：
 非零退出码表示"被观察的对象失败了"，工具本身成功交付了观察结果 → is_error=False。
 只有超时、无法启动这类"工具没能给出观察"的情况才置 is_error=True。
+
+S13 起本工具不再直接 `subprocess.run`：那件事交给 `ExecutionBackend`（SPEC v2 §3.6）。
+留在这里的只有"模型意图层"的判断 —— 空命令、交互式命令、输出格式。
 """
 
 from __future__ import annotations
 
-import os
 import shutil
-import subprocess
 from typing import Any
 
+from miniclaude.backend.local import LocalBackend
+from miniclaude.backend.protocol import ExecutionBackend
 from miniclaude.tools.base import BaseTool, RiskLevel, ToolResult
 
 # 明显会挂住等输入的形态。宁可漏判，也不要误伤正常命令
@@ -42,9 +45,17 @@ class BashTool(BaseTool):
     }
     risk_level = RiskLevel.EXECUTE
 
-    def __init__(self, workspace: Any, default_timeout: int = 60) -> None:
+    def __init__(
+        self,
+        workspace: Any,
+        default_timeout: int = 60,
+        backend: ExecutionBackend | None = None,
+    ) -> None:
         super().__init__(workspace)
         self.default_timeout = default_timeout
+        # 默认值在这里，不在注册表：`BashTool(ws)` 必须仍然能用（测试与脚本都这么写），
+        # 而它要的语义就是"在我这台机器上跑"。
+        self.backend: ExecutionBackend = backend or LocalBackend()
 
     def run(self, *, command: str, timeout: int | None = None) -> ToolResult:
         command = command.strip()
@@ -62,38 +73,18 @@ class BashTool(BaseTool):
             limit = self.default_timeout
         limit = max(1, min(limit, 300))
 
-        argv, shell, executable = self._build(command)
-        env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
-        try:
-            completed = subprocess.run(  # noqa: S603 - 命令由用户授权的 Agent 发起
-                argv,
-                shell=shell,
-                executable=executable,
-                cwd=str(self.ws.root),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=limit,
-            )
-        except subprocess.TimeoutExpired:
+        result = self.backend.exec(command, cwd=self.ws.root, timeout=limit)
+        if result.timed_out:
             return ToolResult.err(
                 f"命令超时（{limit}s）被强制终止：{command!r}。"
                 "请缩小执行范围，或把 timeout 调大；若它在等输入，改成非交互写法。"
             )
-        except OSError as exc:
-            return ToolResult.err(f"无法启动命令：{type(exc).__name__}: {exc}")
+        if result.launch_error:
+            return ToolResult.err(result.launch_error)
 
-        body = "\n".join(part for part in (completed.stdout, completed.stderr) if part) or "(无输出)"
-        header = f"$ {command}\n退出码：{completed.returncode}（{'成功' if completed.returncode == 0 else '失败'}）"
+        body = result.output
+        header = f"$ {command}\n退出码：{result.returncode}（{'成功' if result.returncode == 0 else '失败'}）"
         return ToolResult.ok(self.ws.truncate(f"{header}\n\n{body.strip()}"))
-
-    def _build(self, command: str) -> tuple[Any, bool, str | None]:
-        """Windows 上优先走 Git Bash：cmd.exe 太弱，模型写的 `mkdir -p`、管道会直接失败。"""
-        bash = shutil.which("bash")
-        if bash:
-            return [bash, "-c", command], False, None
-        return command, True, None
 
     @staticmethod
     def _looks_interactive(command: str) -> bool:

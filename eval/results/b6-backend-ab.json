@@ -1,0 +1,136 @@
+{
+  "generated_at": "2026-09-22 21:24:20",
+  "acceptance": "B6",
+  "spec": "§3.6",
+  "engine": "fake",
+  "repeats": 2,
+  "tag": "bugfix",
+  "arms": {
+    "local": {
+      "backend": "local",
+      "degraded": null,
+      "exit_code": 0,
+      "wall_seconds": 93.1,
+      "headline": {
+        "verdicts": {
+          "pass": 12,
+          "fail": 0,
+          "error": 0
+        },
+        "pass_at_1": "6/6",
+        "tokens_total": 0,
+        "context_peak_p95": 0,
+        "tool_error_rate": 0.0
+      },
+      "runs": {
+        "bh-format-duration": "pass",
+        "rt-checkout-bulk": "pass",
+        "session-fix-humanize-only": "pass",
+        "session-fix-ttl-units": "pass",
+        "slug-dedup-clean-rule": "pass",
+        "taxed-fix-eu-vat": "pass"
+      }
+    },
+    "docker": {
+      "backend": "docker",
+      "degraded": null,
+      "exit_code": 0,
+      "wall_seconds": 82.0,
+      "headline": {
+        "verdicts": {
+          "pass": 12,
+          "fail": 0,
+          "error": 0
+        },
+        "pass_at_1": "6/6",
+        "tokens_total": 0,
+        "context_peak_p95": 0,
+        "tool_error_rate": 0.0
+      },
+      "runs": {
+        "bh-format-duration": "pass",
+        "rt-checkout-bulk": "pass",
+        "session-fix-humanize-only": "pass",
+        "session-fix-ttl-units": "pass",
+        "slug-dedup-clean-rule": "pass",
+        "taxed-fix-eu-vat": "pass"
+      }
+    }
+  },
+  "verdict": "pass",
+  "agreement": {
+    "compared": 12,
+    "consistent": 12,
+    "divergent": [],
+    "rate": 1.0,
+    "rate_suppressed": false
+  },
+  "premises": [
+    {
+      "claim": "docker 臂真的用上了 docker（没有静默降级）",
+      "ok": true,
+      "detail": "实际后端 docker"
+    },
+    {
+      "claim": "local 臂没有被替身污染",
+      "ok": true,
+      "detail": "实际后端 local"
+    },
+    {
+      "claim": "替身确实被调用过（命令走过 docker 的 argv）",
+      "ok": true,
+      "detail": "32 次 run、12 次探测"
+    },
+    {
+      "claim": "容器命令行带着隔离旗标",
+      "ok": true,
+      "detail": "抽查 32 条 argv"
+    },
+    {
+      "claim": "宿主解释器没有被写进容器命令（sys.executable → python3）",
+      "ok": true,
+      "detail": "argv 里不应出现宿主 python 的文件名"
+    },
+    {
+      "claim": "容器的工作目录就是这一题隔离出来的那份目录",
+      "ok": true,
+      "detail": "根 D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\b6-ab\\docker\\work · 逐条对上"
+    },
+    {
+      "claim": "容器命令按 `/work` 进工作目录，环境变量只有点名的那些",
+      "ok": true,
+      "detail": "宿主 env 一条都不该透传进容器"
+    },
+    {
+      "claim": "两臂可比对的 run 数不为零",
+      "ok": true,
+      "detail": "12 格"
+    }
+  ],
+  "docker_argv_sample": [
+    "run",
+    "--rm",
+    "--name",
+    "mcc-7eef845856c7",
+    "--network",
+    "none",
+    "-v",
+    "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\b6-ab\\docker\\work\\bh-format-duration.r0.212258:/work",
+    "-w",
+    "/work",
+    "-e",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "--entrypoint",
+    "python3",
+    "python:3.12-slim",
+    "-m",
+    "pytest",
+    "--version"
+  ],
+  "docker_launches": 32,
+  "docker_probes": 12,
+  "docker_reaps": 0,
+  "container_isolation_tested": false,
+  "what_this_proves": "同一批任务在两个后端上判定逐格相同，且 docker 臂真的走完了我们拼的那条命令行（--rm / --network none / -v 宿主:/work / 宿主解释器换成 python3 / 只透传 -e）。",
+  "what_this_does_not_prove": "替身是在宿主上执行命令的假 docker（本机没有 docker：PATH 里找不到）。文件隔离、网络隔离、镜像里装了什么，全都没测过；真 docker 到位后应当原样重跑本脚本，届时的差异只会来自沙箱本身。"
+}

@@ -77,6 +77,18 @@ class Renderer:
             self._write("⚠ " + str(data.get("message") or data.get("reason") or ""))
         elif kind is EventKind.ERROR:
             self.error(str(data.get("message", "")))
+        elif kind is EventKind.CHECKPOINT:
+            # 每次写文件都刷一行会把真正的进度淹没，所以只在 verbose 下露面；
+            # 但**拍不上**这件事不一样 —— 那意味着 /undo 回不到这一次写入之前。
+            if self.verbose or not data.get("ok"):
+                rev = str(data.get("rev") or "")[:8] or "失败"
+                mark = "·" if data.get("ok") else "⚠"
+                extra = "" if data.get("ok") else f"：{data.get('reason')}"
+                self._write(f"{mark} 检查点 {rev}{extra}")
+        elif kind is EventKind.SESSION:
+            # 现场落盘成功是常态，不打扰；失败必须说 —— 那意味着"崩了就没了"。
+            if not data.get("ok"):
+                self._dim(f"  现场没写进去：{data.get('reason')}")
 
     # --------------------------------------------------------------- 输出件
 
@@ -119,6 +131,11 @@ class Renderer:
 
     def error(self, text: str) -> None:
         self._write(f"✗ {text}" if text else "")
+
+    def warn(self, text: str) -> None:
+        """装配期就知道的坏消息（例如 docker 不可用、已降级成 local）。
+        与 `handle` 里的 WARNING 同一副语气：不是失败，但用户必须看见。"""
+        self._write("⚠ " + text if text else "")
 
     def dim(self, text: str) -> None:
         self._dim(text)

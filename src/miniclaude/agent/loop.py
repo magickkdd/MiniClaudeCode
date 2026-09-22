@@ -10,6 +10,12 @@
   2. 停滞检测：连续 3 轮重复同一组调用即终止，这是防烧钱的唯一闸门。
   3. 轮数与 token 双上限：任一命中就止损。
   4. 失败不是终点：工具报错、权限被拒、未知工具名一律转成模型可读的失败描述继续跑。
+
+S13 在这里加了三条同样不可让与的副作用纪律（§3.6）：
+  5. 写完就拍检查点：`write_file` / `edit_file` 成功后立刻 `backend.snapshot()`，
+     rev 进 trace。没有这条，`/undo` 就只能靠"用户记得自己改过什么"。
+  6. 做过的事不重放：`done_call_ids` 里的调用在任何后续进程里都只补记录、不执行。
+  7. 每一批副作用之后落一次现场：崩在批次中间最多丢一个结果，不会丢整个会话。
 """
 
 from __future__ import annotations
@@ -22,10 +28,12 @@ from enum import StrEnum
 from typing import Any
 
 from miniclaude.agent.context import HARD_FUSE_RATIO, ContextManager
-from miniclaude.agent.permissions import PermissionGate
+from miniclaude.agent.permissions import PermissionGate, PermissionMode
 from miniclaude.agent.planner import TodoList
 from miniclaude.agent.prompts import COMPACT_SYSTEM, build_summary_request
 from miniclaude.agent.state import AgentResult, AgentState, TerminationReason
+from miniclaude.backend.protocol import NO_CHECKPOINT_REASON, ExecutionBackend
+from miniclaude.backend.sessions import REPLAY_NOTE, SessionRecorder, SessionSnapshot
 from miniclaude.infra.failure import (
     CallFact,
     RunFacts,
@@ -37,8 +45,18 @@ from miniclaude.infra.trace import new_span_id, prompt_hash
 from miniclaude.llm.base import LLMClient
 from miniclaude.llm.openai_compat import LLMError
 from miniclaude.memory.repo_map import RepoMap
-from miniclaude.messages import Message, Role, StopReason, ToolResultBlock, dedupe_tool_use_ids
-from miniclaude.tools.base import ToolResult
+from miniclaude.messages import (
+    Message,
+    PairingError,
+    Role,
+    StopReason,
+    ToolResultBlock,
+    ToolUseBlock,
+    Usage,
+    dedupe_tool_use_ids,
+    pairing_problems,
+)
+from miniclaude.tools.base import RiskLevel, ToolResult
 from miniclaude.tools.registry import ToolRegistry
 
 STALL_LIMIT = 3
@@ -50,6 +68,15 @@ PREFIX_SAMPLE_CHARS = 2000
 # glob 模式，把它们混进"最近读过的文件"会让一个宽搜索把整个仓库标成焦点 —— 那等于没有焦点。
 FOCUS_READ_TOOLS = frozenset({"read_file"})
 FOCUS_WRITE_TOOLS = frozenset({"write_file", "edit_file"})
+# 只有这两个工具改工作区的**内容**，所以只有它们值得拍检查点。`bash` / `run_tests`
+# 也能改文件（一条 `sed -i` 就够了），但它们的副作用不可预知、且常常正是要观察的对象：
+# 给每次 bash 都拍 rev 会把"模型想看一眼目录"变成一次 git 提交。
+CHECKPOINT_TOOLS = frozenset({"write_file", "edit_file"})
+
+# `/undo` 无话可说时的两种说法，分开是因为它们对用户的下一步不一样：
+# 一种是"再写点东西才有得撤"，另一种是"栈见底了，再按也不会 more"。
+_NO_UNDO_NO_BASELINE = "还没有可回退的写入（检查点栈里只有会话开始时的基线）。"
+_NO_UNDO_EXHAUSTED = "已经没有可撤销的写入了：工作树现在就是本会话最早那个检查点的样子。"
 
 
 class EventKind(StrEnum):
@@ -60,6 +87,8 @@ class EventKind(StrEnum):
     TOOL_END = "tool_end"
     TODO_UPDATE = "todo_update"
     CONTEXT_COMPACT = "context_compact"    # 压缩阶梯动手了
+    CHECKPOINT = "checkpoint"              # 一次写入被记成可回退点（§3.6）
+    SESSION = "session"                    # 现场落盘 / 恢复的对外播报
     WARNING = "warning"
     ERROR = "error"
     FINISHED = "finished"
@@ -97,6 +126,9 @@ class Agent:
         repo_map: RepoMap | None = None,
         system_provider: Callable[[], str] | None = None,
         notes: str = "",
+        backend: ExecutionBackend | None = None,
+        recorder: SessionRecorder | None = None,
+        checkpoints: bool = True,
     ) -> None:
         self.llm = llm
         # L2 摘要默认与主循环同一个客户端；eval 的 fake 引擎必须换成独立队列的假摘要器，
@@ -124,6 +156,18 @@ class Agent:
         self.price_per_mtokens = price_per_mtokens
         self.messages: list[Message] = []
         self.state = AgentState()
+        # 后端与现场都是可选项：手写提示词的测试与 demo 不该被迫认识 §3.6。
+        # 但一旦给了，loop 就是唯一决定"什么时候拍 rev、什么时候落现场"的地方 ——
+        # 把这两件事交给工具或 CLI 去做，就会出现"某条路径忘了拍"的漏洞。
+        self.backend = backend
+        self.recorder = recorder
+        self.checkpoints = checkpoints
+        self.done_call_ids: set[str] = set()
+        self.resumed_from = ""
+        self._baseline_taken = False
+        # /undo 的游标：已经撤销过几次。它属于磁盘状态而不是对话状态，所以 `/reset`
+        # 不清它（磁盘没被 reset 动过），但任何新写入都会把它归零。
+        self._undo_depth = 0
         self._last_error = ""
         self._run_span = ""
         self._turn_span = ""
@@ -139,6 +183,8 @@ class Agent:
         self.messages.clear()
         self.state = AgentState()
         self.todos.items.clear()
+        self.done_call_ids.clear()
+        self.resumed_from = ""
         self._call_facts = []
         self._est_tokens = []
         self._output_by_turn = {}
@@ -253,6 +299,27 @@ class Agent:
         """
         self.messages.append(Message.user_text(user_input))
         self.state = AgentState()
+        self._begin_run(task_id=task_id, user_input_chars=len(user_input))
+        return self._drive()
+
+    def resume(self, *, task_id: str | None = None) -> AgentResult:
+        """从恢复好的现场继续跑（SPEC v2 §3.6）。
+
+        与 `run()` 的区别只有两点：不再追加用户消息，以及**先把上一进程没跑完的那批
+        工具补完**。批次里已记为 done 的调用由 `_run_tools` 直接跳过并回填一条说明，
+        没跑过的照常执行 —— 这样回填给模型的 `tool_results` 依然是全量的（纪律 1），
+        而副作用依然是 at-most-once 的（纪律 6）。
+        """
+        self._begin_run(task_id=task_id, user_input_chars=0, resumed=self.resumed_from)
+        pending = self._dangling_batch()
+        if pending:
+            results, _ = self._run_tools(pending)
+            self.messages.append(Message.tool_results(results))
+            self._save_session()
+        return self._drive()
+
+    def _begin_run(self, *, task_id: str | None, user_input_chars: int, resumed: str = "") -> None:
+        """一次 run 的记账起点。`run()` 与 `resume()` 共用，区别只在调用前做了什么。"""
         self._last_error = ""
         self._run_span = new_span_id()
         self._turn_span = self._run_span
@@ -266,9 +333,37 @@ class Agent:
             span_id=self._run_span,
             run_id=self._run_span,
             task_id=task_id,
-            user_input_chars=len(user_input),
+            user_input_chars=user_input_chars,
+            resumed_from=resumed or None,
         )
+        self._ensure_baseline()
 
+    def _ensure_baseline(self) -> None:
+        """会话第一次开跑前给工作树拍一条基线 rev。
+
+        SPEC §3.6 只写了"每次写入后拍一条"，照做会留下一个洞：撤销的语义是"回到那次写入
+        之前"，而**第一次**写入之前的状态从没被拍下过，`/undo` 到那儿就退不动了。一条基线
+        rev 补上这个洞，代价是每次会话多一次 git commit（工作树本身不动）。
+        """
+        if self._baseline_taken or self.backend is None or not self.checkpoints or self._frozen:
+            return
+        # 探一次就记住：没有 git 的机器不该每轮再问一遍，`resume` 来的现场更不该重拍。
+        self._baseline_taken = True
+        if self.backend.history():
+            return
+        self._checkpoint(tool="", note="baseline")
+
+    def _dangling_batch(self) -> list[ToolUseBlock]:
+        """历史尾部那些"模型已声明、还没回填结果"的调用。"""
+        for message in reversed(self.messages):
+            if message.role is not Role.ASSISTANT:
+                continue
+            answered = {block.tool_use_id for past in self.messages for block in past.results}
+            return [use for use in message.tool_uses if use.id not in answered]
+        return []
+
+    def _drive(self) -> AgentResult:
+        """轮数/预算/上下文/停滞四道闸门的主体。`run()` 与 `resume()` 都从这里进。"""
         stall_signature: str | None = None
         stall_count = 0
         empty_replies = 0
@@ -451,6 +546,9 @@ class Agent:
         SPEC v2 §3.5 排过的只读并发在动手前被 §3.5.1 的实测砍掉：可并行的轮平均只值
         2.9ms，线程池开到无限大也只省 live 墙钟的 0.011%（scripts/probe_parallel_share.py
         重跑即得）。要复活它，先换一个读取本身很贵的任务形状。
+
+        §3.6 的三条副作用纪律也在这里落地：`done_call_ids` 命中就只补记录不执行、
+        写完拍检查点、每次有副作用的执行之后落一次现场。
         """
         results: list[ToolResultBlock] = []
         executed_any = False
@@ -458,6 +556,25 @@ class Agent:
         for call in calls:
             call_span = new_span_id()
             args = call.input if isinstance(call.input, dict) else {}
+
+            if call.id and call.id in self.done_call_ids:
+                # 恢复现场时才会走到这里：这一次调用在上一个进程里已经做完了。
+                # 重放它 = 把 `rm`、`git push`、写文件再做一遍，不可接受；所以只回填一条
+                # 说明。**不写 tool_call 记录**：`tool_call` 的口径是"本进程执行过"，
+                # S12 的数据闸和 eval 的指标都靠它，掺进没执行过的条目就又是假数字。
+                self._trace(
+                    "session_replay",
+                    span_id=call_span,
+                    parent_span_id=self._turn_span,
+                    turn=self.state.turn,
+                    name=call.name,
+                    tool_use_id=call.id,
+                    why="上一进程已完成，未重放",
+                )
+                executed_any = True  # 它确实产出了一次观察，只是产出在另一个进程里
+                results.append(ToolResultBlock(tool_use_id=call.id, content=REPLAY_NOTE, is_error=False))
+                continue
+
             tool = self.registry.get(call.name)
             elapsed = 0.0
             if tool is None:
@@ -504,6 +621,15 @@ class Agent:
                         elapsed=elapsed,
                         output=result.content,
                     )
+                    # 顺序是刻意的：先记账，再拍检查点，最后落现场。反过来会出现
+                    # "现场说这件事做过了，而 rev 记的是做之前的状态"这种自相矛盾。
+                    self.done_call_ids.add(call.id)
+                    if call.name in CHECKPOINT_TOOLS and not result.is_error:
+                        self._checkpoint(tool=call.name)
+                    if not result.is_error and tool.risk_level is not RiskLevel.READ:
+                        # 现场必须紧跟副作用：晚一步的崩溃就会把这次写入重放一遍。
+                        # 只读工具不触发 —— 重放一次 read_file 什么都不损失。
+                        self._save_session()
                 else:
                     executed = False
                     self.state.denied_actions += 1
@@ -589,6 +715,160 @@ class Agent:
             self.repo_map.observe_paths([path])
             self.repo_map.invalidate([path])
 
+    # --------------------------------------------------------------- 检查点与现场
+
+    @property
+    def _frozen(self) -> bool:
+        """当前是否处在"一个字节都不写"的模式。
+
+        装配时已经按 READONLY 关掉了检查点与 recorder，但 `/mode readonly` 可以在会话
+        中途切过去 —— 那时剩下的写盘入口就是这里，所以判定必须发生在用的那一刻，
+        不能只发生在装配的那一刻。
+        """
+        return self.gate.mode is PermissionMode.READONLY
+
+    def _checkpoint(self, *, tool: str, note: str = "") -> None:
+        """给工作树拍一个可回退点，rev 进 trace（SPEC v2 §3.6）。
+
+        拍不成本次 run 照样继续：检查点是**度量与救援设施**，不是任务的一部分。
+        但失败必须留下原因 —— 一个静默跳过的检查点意味着"`/undo` 声称能回滚，
+        实际回不到这一次写入之前"，那比没有检查点更糟。
+        """
+        if self.backend is None or not self.checkpoints or self._frozen:
+            return
+        rev, reason = self.backend.snapshot()
+        payload: dict[str, Any] = {
+            "turn": self.state.turn,
+            "tool": tool or None,
+            "rev": rev or None,
+            "ok": bool(rev),
+            "backend": self.backend.name,
+        }
+        if note:
+            payload["note"] = note
+        if reason:
+            payload["reason"] = reason
+        self._trace(
+            "checkpoint", span_id=new_span_id(), parent_span_id=self._turn_span, **payload
+        )
+        self._emit(EventKind.CHECKPOINT, **payload)
+        if self.recorder is not None and rev:
+            self.recorder.record_checkpoint(rev)
+        if rev:
+            # 新写入让"撤销了几次"这个游标归零：撤销的语义是"撤掉最近那次写入"，
+            # 最近一次已经换了，继续用旧游标就会一次撤两格。
+            self._undo_depth = 0
+
+    def undo_last_write(self) -> tuple[bool, str]:
+        """回退到上一个检查点，并把这个动作写进 trace。
+
+        目标是 `history()[1 + 已撤销次数]`：每条 rev 记的是**那次写入之后**的状态，所以
+        撤销最近一次写入要回到倒数第二条；再按一次 `/undo` 就该继续往更早的一条走。
+        第一条 rev 是本会话的基线（`_ensure_baseline`），没有它就无法把"第一次写入"
+        退回去 —— 那条基线就是为了这个 case 存在的。
+        """
+        target, _, why = self.undo_plan()
+        if not target:
+            return False, why
+        ok, reason = self.backend.restore(target)  # type: ignore[union-attr]  # undo_plan 已保证后端在
+        payload = {
+            "turn": self.state.turn,
+            "tool": None,
+            "rev": target,
+            "ok": ok,
+            "backend": self.backend.name,  # type: ignore[union-attr]
+            "note": f"undo（回到 {target[:8]}）",
+        }
+        if reason:
+            payload["reason"] = reason
+        self._trace("checkpoint", span_id=new_span_id(), parent_span_id=self._turn_span, **payload)
+        self._emit(EventKind.CHECKPOINT, **payload)
+        if ok:
+            self._undo_depth += 1
+            self._save_session(loud=True)
+        return ok, reason
+
+    def undo_plan(self) -> tuple[str, str, str]:
+        """(要回到的 rev, 被这次撤销覆盖的 rev, 不能撤销时的原因)。
+
+        为什么要一次给出两条 rev：`/undo` 改的是用户的文件，确认文案得说清"退回哪儿"
+        **和**"撤掉的是哪次写入"。只报新栈顶是不够的 —— 连着按第二次时栈顶没变，
+        用户会以为自己在撤同一件事。
+        """
+        if self.backend is None or not self.checkpoints:
+            return "", "", NO_CHECKPOINT_REASON
+        if self._frozen:
+            return "", "", "只读模式下不回滚：/undo 会改写工作区。先 /mode ask 或 /mode auto。"
+        revs = self.backend.history()
+        index = self._undo_target(revs)
+        if index is None:
+            return "", "", _NO_UNDO_EXHAUSTED if revs else _NO_UNDO_NO_BASELINE
+        return revs[index], revs[index - 1], ""
+
+    def _undo_target(self, revs: list[str]) -> int | None:
+        """可撤销那条 rev 的下标；None 表示栈已见底。基线占最后一格，所以上界是 len-1。"""
+        index = 1 + self._undo_depth
+        return index if index < len(revs) else None
+
+    def _save_session(self, *, termination: str = "", loud: bool = False) -> None:
+        """落一次可恢复现场。`loud=True` 才写 trace 记录 —— 每次写入都落一次盘，
+        全记会让一次会话多出几十条同义记录；失败则无论安静与否都要记。
+        """
+        if self.recorder is None or self._frozen:
+            return
+        ok = self.recorder.save(self, termination=termination)
+        if ok and not loud:
+            return
+        payload = {
+            "turn": self.state.turn,
+            "ok": ok,
+            "session": self.recorder.session_id,
+            "writes": self.recorder.saves,
+            "done_calls": len(self.done_call_ids),
+            "last_rev": self.recorder.last_checkpoint_rev or None,
+        }
+        if not ok:
+            payload["reason"] = self.recorder.log.degraded or "现场写入失败"
+        self._trace("session_snapshot", span_id=new_span_id(), parent_span_id=self._run_span, **payload)
+        self._emit(EventKind.SESSION, **payload)
+
+    def restore_session(self, snapshot: SessionSnapshot) -> str:
+        """把一份现场装回这台 Agent，返回一句给人看的说明。
+
+        SPEC §3.6 说"不配对就拒绝恢复"。这里比那句话多做了半步，而且是更严的一半：
+        只承认**一种**破损可以自行修好 —— 尾部那条助手消息声明了一批调用、一个都没回填
+        （进程正好死在批次中间）。这种现场能靠 `done_call_ids` 判定哪些真的做过。
+        其余任何破损说明现场被改过或写坏了，猜着往下跑只会把损坏扩大 —— 拒绝，
+        并且把坏现场原样留在文件里让人看。
+
+        判定走的是结构（把尾部去掉再跑一遍 `pairing_problems`），不是解析报错文案：
+        那些文案是给终端看的，改一个字就让恢复逻辑静默失效是不划算的赌注。
+        """
+        messages = snapshot.load_messages()
+        problems = pairing_problems(messages)
+        tail = _repairable_tail(messages)
+        if problems and tail is None:
+            raise PairingError(
+                "现场配对已损坏，而且不是「批次跑到一半」那种，拒绝恢复："
+                + "；".join(problems[:4])
+            )
+        self.messages = messages
+        self.todos.items = [dict(item) for item in snapshot.load_todos()]
+        self.state = _state_from_snapshot(snapshot.state)
+        self.done_call_ids = {str(item) for item in snapshot.done_call_ids}
+        self.resumed_from = snapshot.session_id
+        if self.recorder is not None:
+            self.recorder.last_checkpoint_rev = snapshot.last_checkpoint_rev
+            # 恢复链要能追：这份现场本身是从哪儿来的，下一次落盘时得带着说。
+            self.recorder.resumed_from = snapshot.resumed_from or snapshot.session_id
+            self.recorder.backend = self.backend.name if self.backend is not None else snapshot.backend
+        pending = [use for use in (tail or []) if use.id not in self.done_call_ids]
+        return (
+            f"已恢复会话 {snapshot.session_id}：第 {snapshot.turn} 轮 · {len(messages)} 条消息 · "
+            f"{len(self.done_call_ids)} 个已完成的调用不会重放"
+            + (f" · 还要补跑 {len(pending)} 个调用" if pending else "")
+        )
+
     # --------------------------------------------------------------- 内部
 
     def _system(self) -> str:
@@ -631,6 +911,10 @@ class Agent:
                 why=found.why,
                 prescription=found.prescription,
             )
+        # 收尾也落一次现场：`mcc resume` 要能看见"这个会话是带着什么结论结束的"，
+        # 而且崩溃发生在 `_finish` 里的那些统计步骤时，磁盘上的现场不至于停在第三轮。
+        # 必须在 run_end 之前 —— run_end 是最后一条记录，这条规矩不容破坏。
+        self._save_session(termination=reason.value, loud=True)
         # run_end 必须是这次 run 的最后一条记录：S13 的 durable 续跑靠它判断"这轮跑完了"
         self._trace(
             "run_end",
@@ -742,3 +1026,51 @@ def _cap(text: str, limit: int) -> str:
         return text
     keep = limit // 2
     return f"{text[:keep]}\n\n[… 输出过大，中间 {len(text) - 2 * keep} 字符已省略 …]\n\n{text[-keep:]}"
+
+
+def _repairable_tail(messages: list[Message]) -> list[ToolUseBlock] | None:
+    """唯一一种可自愈的破损：尾部那条助手消息声明了一批调用、一个结果都没回填。
+
+    这正是进程死在批次中间留下的形状 —— 去掉这条尾巴，前面的历史必须完全配对。
+    不满足就返回 None（调用方据此拒绝恢复），因为"部分回填的批次"意味着现场被改过：
+    哪些调用真跑过已经无法从报文本身判断，只能靠 `done_call_ids`，而那份账也就一起可疑了。
+    """
+    if not messages:
+        return None
+    tail = messages[-1]
+    if tail.role is not Role.ASSISTANT:
+        return None
+    uses = tail.tool_uses
+    if not uses or tail.results:
+        return None
+    return uses if not pairing_problems(messages[:-1]) else None
+
+
+def _state_from_snapshot(data: dict[str, Any]) -> AgentState:
+    """把 trace 口径的计数快照还原成可继续累加的 `AgentState`。
+
+    `status` 一律回到 running：快照里那个值是上个进程停下时的结论，本进程接着跑就
+    接着记账，`_finish` 会重新写它。恢复一个"已完成"的状态会让中途的状态检查以为事结束了。
+    """
+    state = AgentState()
+    usage = data.get("usage") or {}
+    state.usage = Usage(
+        prompt_tokens=int(usage.get("prompt") or 0),
+        completion_tokens=int(usage.get("completion") or 0),
+    )
+    for field_name in (
+        "turn",
+        "context_peak_tokens",
+        "context_compactions",
+        "context_elided_blocks",
+        "context_summary_tokens",
+        "tool_calls",
+        "tool_errors",
+        "repeated_calls",
+        "stalled_groups",
+        "denied_actions",
+    ):
+        raw = data.get(field_name)
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            setattr(state, field_name, int(raw))
+    return state

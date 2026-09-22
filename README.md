@@ -294,6 +294,19 @@ PYTHONPATH="src;demos" python -X utf8 scripts/b3_repomap_ab.py --live   # B3 的
 
 B3 的两句判据写在 `eval/results/b3-repomap-ab.json` 里，两臂只差 `--no-repo-map` 一个开关（脚本会先证明这件事：同题集、同重复数、每题 system 哈希跨臂不同、`llm_request` 次数两臂相等）。
 
+**实到结果：机制层 7 条全绿，因果层判"地图没用"。** 6 道 A1 题 × 3 次 × 2 臂 = 36 次真模型运行、1,260,511 tokens：
+
+| | 线 | 实到 |
+|---|---|---|
+| `context_peak` p95 涨幅 | ≤ 15% | **+5.4%**（7,711 → 8,129，地图自己的 token 计进了分母） |
+| `steps_to_success` 中位降幅 | ≥ 20% | **0%**（6.0 → 6.0） |
+| 额外 LLM 调用 | 0 | 两臂各 33 / 33 |
+| 通过数（防幸存者偏差） | on ≥ off | **13/18 vs 14/18** ✗ |
+
+逐题看更诚实：3 题变快（`rt-checkout-bulk` 5→4、`session-fix-humanize-only` 6→4、`slug-dedup-clean-rule` 7→6.5）、2 题变慢（`session-fix-ttl-units` 7.5→8.0、`taxed-fix-eu-vat` 6→8）、1 题（`bh-format-duration`）两臂 3 次全灭所以对中位数贡献为 0 —— 那份中位数实际是 5 题的。结论写成一句话：**地图很便宜，但它在 A1 这种"搜一个符号名 → 读两个文件"的形状上不是那条杠杆**；这类题的定位路径目录树已经给够了。20% 这条线保持原样，不改成能过的数，重测计划记在 SPEC §7.3-5（要换考卷：跨 ≥5 文件的改动题）。机制本身保留 —— 它几乎免费，且是 §3.4 三条排序信号的落地处。
+
+时间开销的账在同一个证据文件的 `budget_lines` 里（不进 B3 判定，SPEC §4 没写它们）：每轮附加开销 **0.0003ms** ✓；进程内 memo 重画 4.0~9.4ms；跨进程命中磁盘缓存 27.9~99.4ms ✗（≤5ms 那条要 `stat` 142 个文件的指纹，压到 5ms 只能不信指纹，而那是 §2.3-1 禁止的）；冷建 142 文件 557~1,381ms、总中位 **829ms** ✗ 一条 800ms 的线 —— 而且这条线配"<2000 文件"隐含 0.4ms/文件，实测 4~7ms/文件，**规格自己的两个数差一个数量级**。详见 SPEC §6.2.1。
+
 ### 4.9 为什么没有并发：一次动手前的砍单（S12 → Tier 3）
 
 SPEC v2 §3.5 原本排了 5 小时做"只读工具并发"（`ThreadPoolExecutor` + 五个竞争写点 + 7 项并发测试），并且写死了砍单条件：**可并行轮占比 < 20% 就不做，这条判断由数据做，不由我做**。S12-a 先把这道闸做成了脚本（`scripts/probe_parallel_share.py`，只读盘上轨迹、不写一行调度代码），结论比砍单条件更硬：
@@ -308,19 +321,37 @@ SPEC v2 §3.5 原本排了 5 小时做"只读工具并发"（`ThreadPoolExecutor
 
 两条纪律顺带被这次测量钉住：① 不用 fake 引擎的 p50 给 B5 签字，因为那里的分母是"没有模型的世界"；② B5 的 15% 保持原样不重述 —— 要复活它得换一个说得通的前提（网络盘、几十 MB 的单文件读），而不是换一个能过的数。条件记在 SPEC §7.3-6。`_run_tools()` 的"刻意不并发"注释继续有效，现在有数据了。
 
-**实到结果：机制层 7 条全绿，因果层判"地图没用"。** 6 道 A1 题 × 3 次 × 2 臂 = 36 次真模型运行、1,260,511 tokens：
+### 4.10 命令在哪儿跑：沙箱后端、可回退检查点与崩了接着跑（`backend/`，S13）
 
-| | 线 | 实到 |
+S13 之前，`bash` 与 `run_tests` 直接 `subprocess.run` 在宿主上 —— 模型跑一句 `rm -rf` 炸的是我的笔记本，而"跑到一半被杀掉"就只能从头再来。这一节是三件事：把"在哪儿跑"抽成一个接口、把每次写入变成可回退点、把会话变成能续的现场。
+
+**`ExecutionBackend` 只有四个方法**（`available` / `exec` / `snapshot` / `restore`），两个实现：
+
+| | `LocalBackend` | `DockerBackend` |
 |---|---|---|
-| `context_peak` p95 涨幅 | ≤ 15% | **+5.4%**（7,711 → 8,129，地图自己的 token 计进了分母） |
-| `steps_to_success` 中位降幅 | ≥ 20% | **0%**（6.0 → 6.0） |
-| 额外 LLM 调用 | 0 | 两臂各 33 / 33 |
-| 通过数（防幸存者偏差） | on ≥ off | **13/18 vs 14/18** ✗ |
+| 行为 | v1 现状**一字不改**（必须继承 `os.environ`，否则找不到 python） | `docker run --rm --name mcc-<hex> --network none -v <工作区>:/work -w /work` 一次一条命令，不驻留容器 |
+| 命令形态 | `str` 走 shell、序列走 `execv` | 同上；宿主解释器只把 **argv[0]** 换成镜像里的 `python3`，模型自己写的 `./venv/bin/python` 原样保留 |
+| 环境变量 | 全量继承 | **只透传显式点名的键** —— 沙箱的一个实际收益是 `.env` 里的密钥不出现在被评测进程的 `/proc/self/environ` |
+| 超时 | 杀进程 | 杀 CLI 之后还要 `docker rm -f` 兜残留（`docker run` 被杀不等于容器停了） |
 
-逐题看更诚实：3 题变快（`rt-checkout-bulk` 5→4、`session-fix-humanize-only` 6→4、`slug-dedup-clean-rule` 7→6.5）、2 题变慢（`session-fix-ttl-units` 7.5→8.0、`taxed-fix-eu-vat` 6→8）、1 题（`bh-format-duration`）两臂 3 次全灭所以对中位数贡献为 0 —— 那份中位数实际是 5 题的。结论写成一句话：**地图很便宜，但它在 A1 这种"搜一个符号名 → 读两个文件"的形状上不是那条杠杆**；这类题的定位路径目录树已经给够了。20% 这条线保持原样，不改成能过的数，重测计划记在 SPEC §7.3-5（要换考卷：跨 ≥5 文件的改动题）。机制本身保留 —— 它几乎免费，且是 §3.4 三条排序信号的落地处。
+**降级不会是静默的**：`--backend docker` 而机器上没有 docker 时，用 local，同时把原因写在终端、trace 的 `backend` 事件和报表里。允许降级是因为沙箱是加强项（缺了它任务仍可判定），不允许静默是因为一个没人看见的降级会让 B6 的结论指向一个根本没跑过的后端。
 
-时间开销的账在同一个证据文件的 `budget_lines` 里（不进 B3 判定，SPEC §4 没写它们）：每轮附加开销 **0.0003ms** ✓；进程内 memo 重画 4.0~9.4ms；跨进程命中磁盘缓存 27.9~99.4ms ✗（≤5ms 那条要 `stat` 142 个文件的指纹，压到 5ms 只能不信指纹，而那是 §2.3-1 禁止的）；冷建 142 文件 557~1,381ms、总中位 **829ms** ✗ 一条 800ms 的线 —— 而且这条线配"<2000 文件"隐含 0.4ms/文件，实测 4~7ms/文件，**规格自己的两个数差一个数量级**。详见 SPEC §6.2.1。
+**检查点是影子 git**：`--git-dir=<记忆目录>/snapshots --work-tree=<工作区>` 的独立索引，**绝不在用户工作区 `init`**（那会在别人的仓库里留一个 `.git` 冲突）。每次 `write_file`/`edit_file` 成功后提交一条 rev 并记进 `checkpoint` 事件，`/undo` 就是 `restore(prev_rev)`，`/backend` 面板列出栈深。两个后端共用**同一份**影子仓库 —— 各存一份会出现"在 docker 臂 undo 回到 local 臂的某个状态"这种跨臂时间旅行。
 
+**Durable 会话**：每轮把 `SessionSnapshot`（消息、todos、`AgentState`、脱敏 config、`last_checkpoint_rev`、**`done_call_ids`**）落进记忆目录，`mcc resume --list` 看还有谁的现场，`mcc resume <id>` 接着跑。恢复时已完成轮次的工具**绝不重放** —— 重复一次 `bash` 的副作用不可接受。代价是口径要写清楚：`run_end.tool_calls` 是**会话级**的账（跨进程续算），trace 里的 `tool_call` 记录是**进程级**的观察。不承诺 exactly-once（那需要后端事务），承诺 at-most-once 副作用 + 可审计现场。
+
+```bash
+mcc --backend docker -y "把失败的测试修好"      # 命令进容器；没 docker 就明说降级成了 local
+mcc eval --backend docker --repeats 2           # B6 的对照臂
+mcc resume --list && mcc resume --latest        # 崩了之后接着跑
+/backend                                        # REPL 里：后端、检查点栈、会话现场三合一面板
+```
+
+**B6 实到：12 / 12 格判定一致（6 道会执行命令的题 × 2 次 × fake 引擎），8 条前提全绿，32 次容器命令行。** 两臂的 verdict、终止原因、**判据清单的 `(label, ok, detail)` 三元组**、`(工具名, ok)` 逐格序列完全相同，宿主解释器没出现在任何一条容器命令里。这条比 B2/B3 便宜是有原因的：后端不改模型看到的任何东西，所以 fake 引擎上的判定分歧**只可能是后端 bug** —— 不像 B3 那样"fake 的 Δ 是我写的剧本的 Δ"。
+
+**这条线没测到的是沙箱本身。** 这台开发机上没有 docker，脚本临时造了一个会真的执行命令的假 `docker` 替身：它按 docker 语义收命令行、只透传 `-e`、把 `-v` 的宿主目录当 `/work`，然后在**宿主上**跑那条命令。所以文件隔离、网络隔离、镜像里装了什么，一次也没测过 —— 结果文件里 `container_isolation_tested: false` 就是这句话的机器可读版本，墙钟那 +4.0s 量的也是"多起一个本机 python 进程"而不是容器启动。真 docker 到位后原样重跑 `scripts/b6_backend_ab.py`，才会第一次看到沙箱自己的代价。
+
+第一次试跑时 B6 报出过一处分歧，凶手是替身自己：`-v` 按**第一个**冒号切分，Windows 的 `D:\...` 当场被切成空挂载目录，于是"容器"在替身自己的 cwd 里跑了整套仓库测试然后超时。它表现成"两个后端结论不同"，实际两臂跑的根本不是同一份代码。前提清单里"容器的工作目录就是这一题隔离出来的那份目录"是这次加的，加完立刻红、修完才绿 —— **一致性判据必须连自己的测量工具一起怀疑**，否则 B6 会通过一个假分歧失败、也会通过一个假一致成功（后者更糟，所以降级臂默认不产出一致率，必须 `--allow-degraded` 显式声明）。
 
 ---
 
@@ -534,13 +565,14 @@ live 那次（`demos/traces/red-tests.live.jsonl`，6 轮 13 次调用）的路�
 ## 8. 测试
 
 ```bash
-python -m pytest -q                # 480 passed
+python -m pytest -q                # 595 passed
 python -m pytest tests/test_loop_with_fake_llm.py -q
 python -m pytest tests/test_eval_runner.py tests/test_eval_cli.py -q   # 评测层（不联网）
 python scripts/b4_label_check.py   # 失败模式标签的人工核对，退出码 0 才算过
 python scripts/b2_compact_ab.py    # B2 三臂 A/B + 12 条判据，退出码 0 才算过（--live 才花额度）
 python scripts/b3_repomap_ab.py    # B3 两臂 A/B：机制判据离线核，因果两条判据要 --live
 python scripts/probe_parallel_share.py  # S12 的数据闸：盘上轨迹里可并行的轮占多少、值多少毫秒（§4.9）
+python scripts/b6_backend_ab.py    # B6 两臂 A/B：docker 臂降级时不产出一致率、直接退 1（§4.10）
 mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 ```
 
@@ -550,6 +582,13 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | `test_compact.py`（25） | 三级阶梯各自触发/不触发：L1 只动工具输出且消息数不变、压到目标线才收手、保护最近 N 轮、L2 整组删、`summary_files` 只报**真存活**的路径、配对破损时放弃并留中文说明、`run_ladder` 一层放弃后不再往上付钱 |
 | `test_pairing.py`（26） | 三条配对规则逐个方向钉死：并行一轮多调用、结果消息不许混文本、**跨轮撞 id**（`dedupe_tool_use_ids` 的确定性改名与"干净历史不许改对象"）、压缩/resume/子 agent 回填三条路径共用同一份判定 |
 | `test_memory.py`（31） | 工作记忆与符号地图：`.mcc/memory.json` 跨实例往返、**坏文件退化成没缓存而不是崩**、未知版本宁丢不猜、笔记按字符封顶、`TEST_COMMAND` 类笔记只展示不执行、地图侧的三条排序信号互不干扰、指纹过期只重建那一个文件、**没有模块级符号的脚本也要占一行**、同一仓库两个实例渲出同一份地图、system 里地图**换掉**目录树而不是叠加、笔记与清单排在地图之后、**一次读不会中途重画地图（字节相同）**、成功的写要喂焦点而被拒的写不喂、`reset()` 清掉上一个任务的焦点、`repo_map` 事件进 trace |
+| `test_docker_backend.py`（12） | **真容器没跑过，所以把可离线证明的三件事钉死**：argv 带齐隔离旗标、宿主解释器只换 argv[0]、宿主 env 一条都不透传；探测成功即缓存、守护进程没应答时原因原样带出、非零退出算观测不算报错、超时后按名字 `docker rm -f`、检查点与 local 共用同一份宿主侧影子 git |
+| `test_backend_factory.py`（18） | 后端点名与**显式降级**：打错的名字启动就失败、docker 不在/探活失败时换成 local 且原因非空、两态 `stats()` 字段集合相同、字符串走 bash 而序列不过 shell、超时是 tool timeout 不是 tool error、合并 env 强制 utf8 与不缓冲 |
+| `test_checkpoints.py`（15） | 影子 git：restore 回原始**字节**（含行尾）、rev 之后新建的文件会被删、被删的文件会回来、**绝不动用户自己的 `.git`**、排除项根锚定、工作树没变也要出一条 rev、影子仓库建不起来/没有 git 一律降级并留原因、记忆目录可以是绝对路径 |
+| `test_sessions.py`（22） | 现场文件：逐字段往返、原子写不留临时文件、坏文件与 schema 不匹配**拒绝而不是猜**、session id 逃不出自己的目录、`prune` 保新丢旧且不碰别人的临时文件、**快照里绝不含明文密钥** |
+| `test_undo.py`（19） | 首次运行拍基线 rev 且每会话只一次、每次成功写入一条 rev、失败写入不拍、`/undo` 一次退一格、游标被新写入 rewind、只读模式既不拍也不允许 undo、检查点关掉后各条路径说同一句话、`/backend` 面板把后端/栈/现场三件事一起说、降级与只读各自诚实 |
+| `test_resume.py`（14） | 幂等重放：`done_call_ids` 里的调用**绝不重跑**、重放回填一句说明而不是输出、重放记 `session_replay` 而不记 `tool_call`、中间断裂的现场拒绝恢复并留在盘上、计数与状态跨进程续算、不重复拍基线、别的项目的现场被守卫挡下、缺现场时提示去哪儿找 |
+| `test_memory_dir.py`（15） | `MEMORY_DIR` 改名成 `.brain` 后**七个消费者一起跟上**：现场/快照/记忆文件落在新名里、旧名一个都不建、检索与 `find_files` 看不见它、`tracked_files` 两种口径对称、env 覆盖生效、`../outside` 这类敌对值启动期拒绝、默认名只有一个产地 |
 | `test_tools.py`（43） | 每个工具的正常路径与失败形态：越界路径、目录当文件读、非法正则、无匹配、`old_string` 不唯一/不匹配、bash 超时、**非零退出算观测不算工具报错**、参数校验、多余参数丢弃、注册表去重 |
 | `test_failure_rules.py`（44） | 8 条失败模式规则各自的命中与**不命中**：真实形状逐条钉住（含"context_growth 在旧 schema 上彻底失明"这条已知盲区），并检查 `scripts/b4_label_check.py` 的 EXPECT 覆盖到盘上每一条 trace |
 | `test_cli.py`（29） | `build_session` 装配、密钥不进 trace 与提示词、REPL 分发与 EOF/Ctrl-C、渲染逐行语义（一行一次调用、标签取识别参数、被拒才打印）、一次性任务的退出码映射、确认器答复翻译 |
@@ -584,6 +623,7 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 - **压缩只到 L2，且它的收益只在 fake 引擎上量化过。** L1 省略工具输出、L2 结构化摘要都已上线并跑通 B2 的 A/B（§4.7），但"压缩后 agent 有没有静默变笨"这件事的真实分布要靠 live 臂：`scripts/b2_compact_ab.py --live`（真实端点 5 次、成功率 ≥60%）**跑过但没跑出结论** —— 端点回 `HTTP 429`（免费档速率限制），42 次运行里 28 次 `llm_failure`，所以 B2 只算完成一半，等额度窗口恢复重跑（`eval/results/b2-live-blocked.json` 记了过程与新命令的预估开销）。另外 `write_file` 的 content 进的是 assistant 消息，L1 碰不到它 —— 写得很长的会话只能靠 L2 那次付费调用救。
 - **符号地图只认 Python、只认 `ast` 能看出来的东西。** 装饰器背后的动态注册、`__all__` 之外的字符串路由、yaml/toml 里的符号都看不见；`REPO_MAP=0` 时退回的仍是那棵固定 30 行、广度优先的目录树，深目录尾部一样要靠模型自己 `find_files`。跨进程缓存命中实测 27.9~99.4ms（最后一次 36.8ms），没达到 SPEC §6.2 的 ≤5ms 那条线 —— 同实例的进程内 memo 是 4.0~9.4ms，那条达标（原因与口径见 `eval/results/b3-repomap-ab.json` 的 `amendments`）。
 - **只读工具并发没做（SPEC v2 的 S12 被数据砍进 Tier 3）。** 不是遗漏：可并行的轮里平均只值 2.9 毫秒，线程池开到无限大也只省 live 墙钟的 0.011%（§4.9）。所以 `_run_tools()` 仍是单循环、结果顺序即声明顺序，`MAX_PARALLEL_READS` 这个旋钮在 `config.py` 里根本不存在 —— 不生效的配置项比缺失的配置项更坏。
+- **`DockerBackend` 的真实容器路径一次也没跑过。** 这台机器上没有 docker，B6 是用一个**会真的在宿主上执行命令**的假 `docker` 替身跑出来的：被证明的是命令行构造、降级不静默、两臂判定一致（12/12）与 rev 共用，**没被证明的是文件隔离、网络隔离、镜像内容**（`eval/results/b6-backend-ab.json` 里 `container_isolation_tested: false`）。所以"这个 agent 能在沙箱里跑"目前是**接口层的事实**，不是运行时的事实；真 docker 到位后原样重跑 `scripts/b6_backend_ab.py` 才算补上。附带一条：`docker run --rm` 每条命令付一次容器启动，本项目里命令只占墙钟 6~10%，延迟付得起，但这笔交换在评测语义上值不值，替身答不了。
 - **live 数字不可复现。** 同一任务重跑轮数会漂移；证据文件因此各自记录自己那一次，不做"平均"。
 - **端点行为依赖。** `tools` 字段偶发被吞，所以工具清单在系统提示里又列了一遍。
 - **`rich` 是可选依赖**，缺失时渲染层自动退化成纯文本，功能不变。
@@ -615,6 +655,9 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | 13 | L2 摘要请求会吃掉 FakeLLM 的剧本队列 | `FakeLLM.create()` 每调一次弹出一条剧本，摘要共用队列 → 后续轮次整体错位，B2 首跑因此少写一份汇总模块，看起来像"压缩把 agent 压傻了" | 摘要走独立客户端；fake 引擎给它独立队列 | `Agent(summarizer_llm=...)`（live 默认与主客户端同一个）+ `demos/fakes.py::FakeSummarizer` + `EvalRunner.summarizer_for()` |
 | 14 | S11 的 `.mcc/` 缓存会同时污染判据与 A/B | 判据里有"工作副本除了答案不许有别的改动"这一条，而 agent 读文件时地图自己会往 `.mcc/` 写缓存 —— 于是一道只读题因为"看了盘"被判 fail；两臂也不同了：先跑的臂把缓存焐热，后跑的臂白捡一次热启动 | 记忆目录属于**工具副作用**，不属于源码：判据侧忽略它，隔离侧不复制它 | `eval/contract.py::NOISE` 增 `.mcc`（judge 不看、`isolate()` 不拷），每臂从空缓存开始；READONLY 模式下干脆不建 store（没写手就不留看不见的状态） |
 | 15 | SPEC §5.3 把 `REPO_MAP_TOKENS` 的 `0` 定义成"关闭地图"，与 §3.4 的开关 `REPO_MAP` 撞车 | 两个旋钮管同一件事，就必然出现"`REPO_MAP=1` 且 `REPO_MAP_TOKENS=0`"这种没人能解释的配置 | 关就关在 `REPO_MAP`，预算只当预算 | `REPO_MAP_TOKENS < 1` 在 config、CLI、`EvalRunner` 三处都拒绝（不是静默归零），关闭走 `--no-repo-map` / `REPO_MAP=0` |
+| 16 | SPEC §3.6 的接口签名落地时兜不住真实需求（三处） | `exec(command: str)` 分不清"该过 shell 的字符串"与"该走 execv 的 argv"；`snapshot() -> str` 让"没拍成"与"拍了但 rev 是空串"在 trace 里长得一样；检查点若按后端各存一份，会出现跨臂时间旅行 | §3.6 的签名以实到为准：`Command = str \| Sequence[str]`、`(rev, 原因)` 二元组、两臂共用同一份宿主侧 `Checkpointer` | 已在 SPEC §3.6.1 用表格逐条记明改动与理由 |
+| 17 | "崩在批次中间"能被剪出无数种形状，但只有一种是真实现场 | 中断只发生在一条助手消息声明了 N 个 tool_use、结果回填到第 k 个的时刻；"中间断裂""结果多余"都是手写出来的损坏，按可恢复处理就等于替用户猜语义 | 明确契约：`restore_session` **只承认**"前缀全配对 + 末条助手消息零结果"这一种破损，其余一律拒绝并把坏现场留在盘上 | 写进 §3.6.1 与 `test_resume`（`a broken middle is refused and left on disk`）；测试助手 `crash_scene` 的 `keep=2` 因此是契约的一部分，不是随手挑的下标 |
+| 18 | B6 的措辞预设了"有两个能跑的后端"，而这台机器上只有一个 | 没有 docker 就只有两种选择：整条验收线挂"待环境"，或用替身把**能离线证明的部分**证掉、把不能的部分写成字段 | 允许，但必须自己划清边界：脚本先证明前提（docker 臂真的用上 docker、命令行拼对、容器 cwd 对、env 没漏），任一条不成立就不产出一致率 | 结果文件里 `container_isolation_tested: false` + `what_this_proves` / `what_this_does_not_prove` 两栏；README §9 同一条局限原样写着 |
 
 ---
 
@@ -637,9 +680,16 @@ mini-claude-code/
 │   ├── cli/                    build_session、REPL、渲染（rich 可选）
 │   │                           / trace_cmd（`mcc trace` 三个视图）
 │   │                           / eval_cmd（`mcc eval` 批跑入口，退出码=结论）
-│   ├── memory/                 工作记忆与仓库地图（S11）
-│   │   ├── store.py            `.mcc/memory.json`：四类记忆、指纹、原子写、坏文件退化成没缓存
+│   ├── memory/                 工作记忆与仓库地图（S11 · 目录名由 MEMORY_DIR 定）
+│   │   ├── store.py            `memory.json`：四类记忆、指纹、原子写、坏文件退化成没缓存
 │   │   └── repo_map.py         ast 符号图 + 三条排序信号 + token 预算裁剪 + 过期只重建单文件
+│   ├── backend/                执行后端（S13）
+│   │   ├── protocol.py         ExecutionBackend 协议 + `Command = str | Sequence[str]` + BackendResult
+│   │   ├── local.py            现状行为，一字不改（必须继承 os.environ）
+│   │   ├── docker.py           `docker run` 一次一条：不带宿主 env、argv[0] 换 python3、超时兜 rm -f
+│   │   ├── checkpoints.py      影子 git（独立 --git-dir），两个后端共用同一份
+│   │   ├── factory.py          点名 → 探测 → **显式**降级，原因进 trace 与终端
+│   │   └── sessions.py         SessionSnapshot 落盘与读回（原子写、坏现场拒绝而不是猜）
 │   ├── infra/
 │   │   ├── trace.py            JSONL 轨迹、replay、summarize、密钥脱敏
 │   │   └── failure.py          失败模式分类学（8 条规则，在线/离线共用）
@@ -659,8 +709,8 @@ mini-claude-code/
 │   ├── baselines/              `fake-<题集哈希>.json` —— B1 的基线，进版本库
 │   ├── results/                验收线的证据文件（b2/b3 的 A/B 判据、live 冒烟报表；数字不可复现所以入库）
 │   └── .work/                  工作副本与逐条记录（忽略，报表与基线才提交）
-├── scripts/                    probe_caps / probe_window / probe_parallel_share / b4_label_check / b2_compact_ab / b3_repomap_ab 等证据生成器
-├── tests/                      480 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照）
+├── scripts/                    probe_caps / probe_window / probe_parallel_share / b4_label_check / b2_compact_ab / b3_repomap_ab / b6_backend_ab 等证据生成器
+├── tests/                      595 项，FakeLLM 驱动，不联网（schema_v2.json 是 trace 契约快照）
 └── demos/
     ├── run_demo.py             隔离副本 → 跑真 Agent → 独立判据 → 生成证据
     ├── fake_scripts.py         FakeLLM 轨迹（脚本化，不报自述数字）

@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-from miniclaude.config import Config, ConfigError, get_config
+from miniclaude.config import BACKEND_NAMES, Config, ConfigError, get_config
 from miniclaude.eval import regression
 from miniclaude.eval.taskset import TaskSet, TaskSetError
 
@@ -69,6 +69,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="覆盖 REPO_MAP_TOKENS（地图的 token 预算）；它计入 context_peak，B3 的第二条判据就靠这个口径",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=BACKEND_NAMES,
+        default=None,
+        help="命令在哪儿跑（B6 的对照臂）。docker 不可用时这批会降级成 local，并在终端与 trace 里写明",
+    )
+    parser.add_argument(
+        "--no-checkpoints",
+        dest="checkpoints",
+        action="store_false",
+        default=None,
+        help="批跑期间不拍检查点（影子仓库因此不建；/undo 与回滚类判据不可用）",
     )
     parser.add_argument("--lint", action="store_true", help="只做考题自检（判据可能为真的题）后退出")
     parser.add_argument("--list", dest="as_list", action="store_true", help="列出任务后退出")
@@ -140,11 +153,15 @@ def run(argv: Sequence[str], config: Config | None = None) -> int:
         or args.context_hard_limit
         or args.repo_map is False
         or args.repo_map_tokens is not None
+        # 后端与检查点也算"拧过配置"：B6 的分数不能和默认批混读，混读等于没有对照组。
+        or args.backend is not None
+        or args.checkpoints is False
     )
     if tuned and args.save_baseline and not args.force:
         print(
             "已拒绝：--no-compact / --context-budget / --context-hard-limit / --no-repo-map /"
-            " --repo-map-tokens 改过阶梯或地图，这批不能当基线入库（确实要就加 --force）",
+            " --repo-map-tokens / --backend / --no-checkpoints 改过阶梯、地图或后端，"
+            "这批不能当基线入库（确实要就加 --force）",
             file=sys.stderr,
         )
         return 2
@@ -165,6 +182,8 @@ def run(argv: Sequence[str], config: Config | None = None) -> int:
         context_hard_limit=args.context_hard_limit,
         repo_map=False if args.repo_map is False else None,
         repo_map_tokens=args.repo_map_tokens,
+        backend=args.backend,
+        checkpoints=args.checkpoints,
     )
     scope = (
         f"{len(selected)} 题 × {repeats} 次"
@@ -192,6 +211,14 @@ def run(argv: Sequence[str], config: Config | None = None) -> int:
             + ("关（system 里是 v1 目录树）" if args.repo_map is False else "开")
             + (f" · 预算 {args.repo_map_tokens:,} tokens" if args.repo_map_tokens is not None else "")
             + " —— 这批的分数不与默认配置批混读"
+        )
+    if args.backend is not None or args.checkpoints is False:
+        # B6 的第一行汇报必须是"这批到底跑在哪个后端上"。真实后端可能已被降级成
+        # local，而那句降级藏在每条 trace 的 `backend` 事件里 —— 批跑开始时就该说明白。
+        print(
+            f"执行后端：点名 {args.backend or '按配置'} · 检查点"
+            + ("关" if args.checkpoints is False else "开")
+            + " —— 实际用的是哪个，看 trace 里的 backend 事件（降级不会是静默的）"
         )
     if baseline_path is not None:
         print(f"基线：{baseline_path}")

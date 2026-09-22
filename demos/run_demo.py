@@ -106,8 +106,8 @@ print("README 表格全部兑现")
 
 def judge_codegen(ctx: Context) -> list[Check]:
     code, counts, _ = pytest_report(ctx.workdir)
-    baseline_tests = file_count(ctx.baseline / "tests")
-    tests_now = file_count(ctx.workdir / "tests")
+    baseline_tests = file_count(ctx.baseline / "tests", memory_dir=ctx.memory_dir)
+    tests_now = file_count(ctx.workdir / "tests", memory_dir=ctx.memory_dir)
     readme = ctx.workdir / "README.md"
     return [
         Check("pytest 退出码 0", code == 0, f"退出码 {code}，{counts['passed']} passed / {counts['failed']} failed"),
@@ -141,14 +141,16 @@ def judge_bug_hunt(ctx: Context) -> list[Check]:
             counts["collected"] > base_counts["collected"],
             f"{base_counts['collected']} 个 → {counts['collected']} 个",
         ),
-        subset_only_added("tests", ctx.baseline, ctx.workdir),
+        subset_only_added("tests", ctx.baseline, ctx.workdir, memory_dir=ctx.memory_dir),
     ]
 
 
 def judge_red_tests(ctx: Context) -> list[Check]:
     _, base_counts, _ = pytest_report(ctx.baseline)
     code, counts, _ = pytest_report(ctx.workdir)
-    cart_changed = tree_hash(ctx.baseline / "cart") != tree_hash(ctx.workdir / "cart")
+    cart_changed = tree_hash(ctx.baseline / "cart", memory_dir=ctx.memory_dir) != tree_hash(
+        ctx.workdir / "cart", memory_dir=ctx.memory_dir
+    )
     return [
         Check(
             "原本红的套件现在全绿",
@@ -156,7 +158,7 @@ def judge_red_tests(ctx: Context) -> list[Check]:
             f"基线 {base_counts['failed']} failed → 现在 {counts['passed']} passed，退出码 {code}",
         ),
         behavior(ctx.workdir, CHECKOUT_PROBE, label="结算数值与 README 一致（独立脚本校验）"),
-        subset_identical("tests", ctx.baseline, ctx.workdir),
+        subset_identical("tests", ctx.baseline, ctx.workdir, memory_dir=ctx.memory_dir),
         Check("改动确实落在 `cart/`", cart_changed, "价格代码被修改过" if cart_changed else "cart/ 没有任何改动"),
     ]
 
@@ -176,7 +178,8 @@ print("结算规则与 README 一致")
 
 
 def judge_readonly(ctx: Context) -> list[Check]:
-    before, after = tree_hash(ctx.baseline), tree_hash(ctx.workdir)
+    before = tree_hash(ctx.baseline, memory_dir=ctx.memory_dir)
+    after = tree_hash(ctx.workdir, memory_dir=ctx.memory_dir)
     answer = ctx.result.text
     spotted = ("SECONDS_PER_HOUR" in answer or "3600" in answer) and (
         "86400" in answer or "SECONDS_PER_DAY" in answer
@@ -196,7 +199,7 @@ def judge_giveup(ctx: Context) -> list[Check]:
             ctx.result.termination in (TerminationReason.MAX_TURNS, TerminationReason.STALLED),
             f"终止原因 {ctx.result.termination.value}（轮数 {ctx.result.state.turn}）",
         ),
-        subset_identical("tests", ctx.baseline, ctx.workdir),
+        subset_identical("tests", ctx.baseline, ctx.workdir, memory_dir=ctx.memory_dir),
     ]
 
 
@@ -334,6 +337,9 @@ class Run:
     workdir: Path
     baseline: Path
     trace: Path
+    # 报告里那个 baseline 哈希要和判定用同一个排除口径：表里的数与判定的数来自两套
+    # 树视图时，"可溯源"就只剩一个字面意思了。
+    memory_dir: str
 
     @property
     def tokens(self) -> int:
@@ -408,7 +414,10 @@ def run_demo(
         raise
     elapsed = time.perf_counter() - started
 
-    ctx = Context(engine=engine, workdir=workdir, baseline=baseline, result=result, console=lines)
+    ctx = Context(
+        engine=engine, workdir=workdir, baseline=baseline, result=result, console=lines,
+        memory_dir=cfg.memory_dir,
+    )
     outcome = Outcome(checks=demo.judge(ctx))
     stats = summarize(trace) if trace.exists() else {}
     return Run(
@@ -420,16 +429,17 @@ def run_demo(
         outcome=outcome,
         console=lines,
         stats=stats,
-        diff=diff_trees(baseline, workdir),
+        diff=diff_trees(baseline, workdir, memory_dir=cfg.memory_dir),
         elapsed=elapsed,
         workdir=workdir,
         baseline=baseline,
         trace=trace,
+        memory_dir=cfg.memory_dir,
     )
 
 
-def diff_trees(before: Path, after: Path) -> str:
-    old_files, new_files = _files(before), _files(after)
+def diff_trees(before: Path, after: Path, *, memory_dir: str) -> str:
+    old_files, new_files = _files(before, memory_dir=memory_dir), _files(after, memory_dir=memory_dir)
     chunks: list[str] = []
     for name in sorted(set(old_files) | set(new_files)):
         old, new = old_files.get(name), new_files.get(name)
@@ -473,7 +483,7 @@ def evidence_markdown(run: Run) -> str:
         "| 字段 | 值 |",
         "|---|---|",
         f"| task | {demo.task} |",
-        f"| repo/baseline | `demos/fixtures/{demo.fixture}` · baseline `{tree_hash(run.baseline)}`（{file_count(run.baseline)} 个文件） |",
+        f"| repo/baseline | `demos/fixtures/{demo.fixture}` · baseline `{tree_hash(run.baseline, memory_dir=run.memory_dir)}`（{file_count(run.baseline, memory_dir=run.memory_dir)} 个文件） |",
         f"| expected | {demo.expected} |",
         f"| actual | `{run.result.termination.value}` · 判定 {run.outcome.verdict()}（{run.outcome.passed}/{len(run.outcome.checks)}） |",
         f"| turns / tokens | {run.result.state.turn} 轮 / {tokens} |",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from miniclaude.backend.protocol import ExecutionBackend
 from miniclaude.tools.base import BaseTool, ToolSpec
 from miniclaude.tools.bash import BashTool
 from miniclaude.tools.edit_file import EditFileTool
@@ -61,11 +62,15 @@ class ToolRegistry:
         *,
         bash_timeout: int = 60,
         extra_tools: Iterable[BaseTool] = (),
+        backend: ExecutionBackend | None = None,
     ) -> "ToolRegistry":
         """装配 MVP 的七个执行/检索工具。
 
         write_todos 不在这里 —— 它需要 TodoList 实例，由调用方通过
         extra_tools 注入，避免工具层反向依赖 agent 层。
+
+        `backend=None` 时两个执行工具各自退回 LocalBackend：注册表不替调用方
+        决定"命令在哪儿跑"，但也不要求每个 caller 都先想清楚这件事。
         """
         tools: list[BaseTool] = [
             ReadFileTool(workspace),
@@ -73,8 +78,8 @@ class ToolRegistry:
             FindFilesTool(workspace),
             EditFileTool(workspace),
             WriteFileTool(workspace),
-            BashTool(workspace, default_timeout=bash_timeout),
-            RunTestsTool(workspace),
+            BashTool(workspace, default_timeout=bash_timeout, backend=backend),
+            RunTestsTool(workspace, backend=backend),
         ]
         tools.extend(extra_tools)
         return cls(tools)

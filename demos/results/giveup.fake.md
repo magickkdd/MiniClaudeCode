@@ -16,7 +16,7 @@
 | 失败模式 | budget_exhausted |
 | 上下文峰值 | 0 tokens |
 | 权限模式 | `auto`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |
-| wall time | 2.9s |
+| wall time | 8.0s |
 | trace | `demos/traces/giveup.fake.jsonl` |
 | 工作副本 | `demos/.work/giveup`（判定就在这个目录跑） |
 
@@ -38,13 +38,13 @@
   [~] 跑测试确认红的是哪一条
   [ ] 把 DEFAULT_TIMEOUT 对齐文档口径
 红的是「60 秒」那条断言。
-✓ run_tests     1.0s
+✓ run_tests     2.4s
 按文档改成 60。
-✓ edit_file   app/settings.py  1ms
-✓ run_tests     944ms
+✓ edit_file   app/settings.py  3ms
+✓ run_tests     2.2s
 现在换成 30 那条红了。两条断言互相排斥，先改回去。
-✓ edit_file   app/settings.py  1ms
-✓ run_tests     929ms
+✓ edit_file   app/settings.py  2ms
+✓ run_tests     2.3s
 ```
 
 ## 模型的最后一段话

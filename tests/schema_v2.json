@@ -1,4 +1,36 @@
 {
+  "backend": [
+    "backend",
+    "checkpoints",
+    "degraded",
+    "isolated",
+    "kind",
+    "note",
+    "requested",
+    "schema_version",
+    "seq",
+    "session",
+    "shell",
+    "trace_id",
+    "ts",
+    "turn"
+  ],
+  "checkpoint": [
+    "backend",
+    "kind",
+    "note",
+    "ok",
+    "parent_span_id",
+    "rev",
+    "schema_version",
+    "seq",
+    "session",
+    "span_id",
+    "tool",
+    "trace_id",
+    "ts",
+    "turn"
+  ],
   "context_compact": [
     "after_est",
     "before_est",
@@ -160,6 +192,7 @@
   ],
   "run_start": [
     "kind",
+    "resumed_from",
     "run_id",
     "schema_version",
     "seq",
@@ -169,6 +202,35 @@
     "trace_id",
     "ts",
     "user_input_chars"
+  ],
+  "session_replay": [
+    "kind",
+    "name",
+    "parent_span_id",
+    "schema_version",
+    "seq",
+    "session",
+    "span_id",
+    "tool_use_id",
+    "trace_id",
+    "ts",
+    "turn",
+    "why"
+  ],
+  "session_snapshot": [
+    "done_calls",
+    "kind",
+    "last_rev",
+    "ok",
+    "parent_span_id",
+    "schema_version",
+    "seq",
+    "session",
+    "span_id",
+    "trace_id",
+    "ts",
+    "turn",
+    "writes"
   ],
   "session_start": [
     "config",

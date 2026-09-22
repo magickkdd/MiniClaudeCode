@@ -28,10 +28,22 @@ from pathlib import Path
 from typing import Sequence
 
 from miniclaude.agent.state import AgentResult
+from miniclaude.memory import MEMORY_DIRNAME
 
-# 判定眼里的"不算仓库内容"。`.mcc` 是 agent 自己写的派生缓存（SPEC v2 §3.4）：
+# 判定眼里的"不算仓库内容"。最后那一项是 agent 自己写的派生缓存（SPEC v2 §3.4）：
 # 把它算进树哈希，一次 AUTO 跑批就会自己把自己留下的缓存当成"改动了源码"。
-NOISE = ("__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", ".mcc")
+# 目录名本身是可配置的（`MEMORY_DIR`，§3.6），所以这里只放**默认名**，实际判定时
+# 由 `noise_names()` 把当次会话真正用的那个名字补上 —— 只信 `.mcc` 的话，改一次目录名
+# 就会让整套判据凭空多出一批"新增文件"。
+NOISE = ("__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache")
+
+
+def noise_names(memory_dir: str | Path = MEMORY_DIRNAME) -> tuple[str, ...]:
+    """`NOISE` 加上这一次真正生效的记忆目录名。"""
+    name = Path(str(memory_dir)).name
+    return NOISE + ((name,) if name else ())
+
+
 CHILD_ENV = {
     **os.environ,
     "PYTHONIOENCODING": "utf-8",
@@ -85,17 +97,24 @@ class Context:
     baseline: Path
     result: AgentResult
     console: list[str]
+    # 这一次会话把派生缓存写在哪个目录下（`MEMORY_DIR`）。判定要把它当噪声排除，
+    # 所以它必须跟着现场走，而不是由判定层再去问一遍环境 —— 两处取值一旦分叉，
+    # "只读模式没碰盘"就会因为一个 `.mcc/` 而判假。
+    memory_dir: str = MEMORY_DIRNAME
 
 
 # --------------------------------------------------------------- 工作副本隔离
 
 
-def isolate(source: Path, target: Path) -> Path:
+def isolate(source: Path, target: Path, *, memory_dir: str | Path = MEMORY_DIRNAME) -> Path:
     """把考题复制成一份干净的工作副本，返回真正可用的那个路径。
 
     判定必须在副本里跑：跑过一次之后目录就被改过了，第二次再拿它当基线，
     "只增不删""逐字节未变"这类判据会全部失效。demo 与评测层共用这一份实现，
     否则两边对"干净"的定义会分叉。
+
+    复制时排除 `noise_names()`：把上一次跑批留下的记忆目录抄进新副本，等于让一次
+    只读任务"看起来"改动了仓库。目录名从调用方拿（`MEMORY_DIR`），不写死。
     """
     if target.exists():
         try:
@@ -107,7 +126,7 @@ def isolate(source: Path, target: Path) -> Path:
             shutil.rmtree(target, ignore_errors=True)
     target.parent.mkdir(parents=True, exist_ok=True)
     if source.is_dir():
-        shutil.copytree(source, target, ignore=shutil.ignore_patterns(*NOISE))
+        shutil.copytree(source, target, ignore=shutil.ignore_patterns(*noise_names(memory_dir)))
     else:
         target.mkdir(parents=True)
     return target
@@ -249,34 +268,37 @@ def run_verify_cmd(workdir: Path, command: str) -> tuple[int, str]:
 # --------------------------------------------------------------- 文件树与"别改考卷"
 
 
-def tracked_files(root: Path) -> dict[str, bytes]:
+def tracked_files(root: Path, *, memory_dir: str | Path = MEMORY_DIRNAME) -> dict[str, bytes]:
     if not root.is_dir():
         return {}
+    noise = noise_names(memory_dir)
     out: dict[str, bytes] = {}
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or any(noise in path.parts for noise in NOISE) or path.suffix == ".pyc":
+        if not path.is_file() or any(part in noise for part in path.parts) or path.suffix == ".pyc":
             continue
         out[path.relative_to(root).as_posix()] = path.read_bytes()
     return out
 
 
-def tree_hash(root: Path) -> str:
+def tree_hash(root: Path, *, memory_dir: str | Path = MEMORY_DIRNAME) -> str:
     digest = hashlib.sha256()
-    for name, payload in tracked_files(root).items():
+    for name, payload in tracked_files(root, memory_dir=memory_dir).items():
         digest.update(name.encode("utf-8"))
         digest.update(b"\0")
         digest.update(hashlib.sha256(payload).digest())
     return digest.hexdigest()[:12]
 
 
-def file_count(root: Path) -> int:
-    return len(tracked_files(root))
+def file_count(root: Path, *, memory_dir: str | Path = MEMORY_DIRNAME) -> int:
+    return len(tracked_files(root, memory_dir=memory_dir))
 
 
-def changed_in_subset(subset: str, baseline: Path, workdir: Path) -> list[str]:
+def changed_in_subset(
+    subset: str, baseline: Path, workdir: Path, *, memory_dir: str | Path = MEMORY_DIRNAME
+) -> list[str]:
     """基线里就存在的文件被改动/删除的清单 —— 用来抓"改测试让测试变绿"。"""
-    before = tracked_files(baseline / subset)
-    after = tracked_files(workdir / subset)
+    before = tracked_files(baseline / subset, memory_dir=memory_dir)
+    after = tracked_files(workdir / subset, memory_dir=memory_dir)
     return sorted(name for name, payload in before.items() if after.get(name) != payload)
 
 
@@ -298,9 +320,9 @@ def verify_paths(
     return (1 if problems else 0), detail
 
 
-def subset_identical(subset: str, baseline: Path, workdir: Path) -> Check:
+def subset_identical(subset: str, baseline: Path, workdir: Path, *, memory_dir: str | Path = MEMORY_DIRNAME) -> Check:
     """基线里就存在的文件必须逐字节不变。任务里明说"别动 tests/"的场合用它。"""
-    broken = changed_in_subset(subset, baseline, workdir)
+    broken = changed_in_subset(subset, baseline, workdir, memory_dir=memory_dir)
     detail = (
         f"{subset}/ 有 {len(broken)} 个原有文件被改动：{', '.join(broken[:3])}"
         if broken
@@ -309,14 +331,19 @@ def subset_identical(subset: str, baseline: Path, workdir: Path) -> Check:
     return Check(label=f"`{subset}/` 未被为了让测试变绿而改写", ok=not broken, detail=detail)
 
 
-def subset_only_added(subset: str, baseline: Path, workdir: Path) -> Check:
+def subset_only_added(
+    subset: str, baseline: Path, workdir: Path, *, memory_dir: str | Path = MEMORY_DIRNAME
+) -> Check:
     """只许加不许删 —— 用于"补一个防回归测试"这类任务。
 
     字节级不变在这里太严：往既有的 `tests/test_x.py` 里加一个函数是完全正确的
     做法，判它失败等于逼模型去新建文件。这里改判"基线的每一行是否还在"，
     删断言、改断言、删文件都会被抓到。
     """
-    before, after = tracked_files(baseline / subset), tracked_files(workdir / subset)
+    before, after = (
+        tracked_files(baseline / subset, memory_dir=memory_dir),
+        tracked_files(workdir / subset, memory_dir=memory_dir),
+    )
     problems: list[str] = []
     for name, payload in before.items():
         current = after.get(name)

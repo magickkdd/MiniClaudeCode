@@ -28,7 +28,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-MEMORY_DIRNAME = ".mcc"
+from miniclaude.config import DEFAULTS
+
+MEMORY_DIRNAME = str(DEFAULTS["MEMORY_DIR"])  # 缺省目录名只有一个产地：config.DEFAULTS
 STORE_FILENAME = "memory.json"
 STORE_VERSION = 1
 
@@ -77,8 +79,11 @@ class MemoryStore:
     writes: int = 0
 
     @classmethod
-    def for_project(cls, project_root: Path | str) -> "MemoryStore":
-        return cls(root=Path(project_root) / MEMORY_DIRNAME)
+    def for_project(cls, project_root: Path | str, memory_dir: str | Path = MEMORY_DIRNAME) -> "MemoryStore":
+        """`memory_dir` 由调用方（Config.MEMORY_DIR）给，这里只负责拼路径。"""
+        mem = Path(memory_dir)
+        root = mem if mem.is_absolute() else Path(project_root) / mem
+        return cls(root=root)
 
     def __post_init__(self) -> None:
         self.root = Path(self.root)

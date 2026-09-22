@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-DEFAULTS: dict[str, int] = {
+DEFAULTS: dict[str, Any] = {
     "MAX_TURNS": 25,
     "MAX_TOKENS": 4096,
     "BASH_TIMEOUT": 60,
@@ -22,7 +22,22 @@ DEFAULTS: dict[str, int] = {
     "REPO_MAP_TOKENS": 1_500,        # 地图自己的 token 预算，计入 system 与估算
     "MAX_TOTAL_TOKENS": 800_000,
     "LLM_REQUEST_TIMEOUT": 120,
+    # §3.6：默认 local 而不是 auto。"有 docker 就用"会让同一个 .env 在不同机器上
+    # 跑出不同后端，而 B6 要问的恰恰是"换后端会不会换结论"。
+    "EXECUTION_BACKEND": "local",
+    "DOCKER_IMAGE": "python:3.12-slim",
+    "DOCKER_NETWORK": "none",        # 空串 = 不传 --network（宿主网络），仅本地排障用
+    "CHECKPOINTS": 1,                # 0 = 不建影子 git（A3 只读演练与容器内跑批用）
+    "MEMORY_DIR": ".mcc",            # 记忆 / 快照 / 会话快照的唯一落盘目录名
 }
+
+# 字符串型旋钮的缺省值与整数型共用 DEFAULTS 这一张表，由 `_str()` 读取。
+# 拆成两张表就会出现"改了表 A 忘了表 B"，而这类漂移在配置层是静默的。
+
+# 合法的后端名。实现住在 `backend/factory.py`，这里只放契约 —— 配置层要能在启动时
+# 拒绝打错的名字，而不该为此 import 执行层。两边一致由
+# `tests/test_backend_factory.py::test_every_advertised_name_has_an_implementation` 钉住。
+BACKEND_NAMES: tuple[str, ...] = ("local", "docker")
 
 
 class ConfigError(RuntimeError):
@@ -57,6 +72,11 @@ class Config:
     request_timeout: int = DEFAULTS["LLM_REQUEST_TIMEOUT"]
     price_per_mtokens: float = 0.0
     trace_path: Path | None = None
+    execution_backend: str = str(DEFAULTS["EXECUTION_BACKEND"])
+    docker_image: str = str(DEFAULTS["DOCKER_IMAGE"])
+    docker_network: str = str(DEFAULTS["DOCKER_NETWORK"])
+    checkpoints: bool = bool(DEFAULTS["CHECKPOINTS"])
+    memory_dir: str = str(DEFAULTS["MEMORY_DIR"])
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None) -> "Config":
@@ -89,6 +109,15 @@ class Config:
             raise ConfigError(
                 f"REPO_MAP_TOKENS({map_tokens}) 至少 1：要关地图请用 REPO_MAP=0（B3 的对照臂走的就是它）。"
             )
+        backend = _str("EXECUTION_BACKEND").lower()
+        if backend not in BACKEND_NAMES:
+            # 打错的后端名绝不能静默变成 local —— 那正是 §3.6 禁止的"换了后端没人知道"。
+            raise ConfigError(
+                f"EXECUTION_BACKEND 只能是 {' / '.join(BACKEND_NAMES)}，当前值：{backend!r}"
+            )
+        memory_dir = _str("MEMORY_DIR")
+        if not memory_dir or ".." in Path(memory_dir).parts:
+            raise ConfigError(f"MEMORY_DIR 不能为空或包含 ..，当前值：{memory_dir!r}")
 
         return cls(
             base_url=base_url,
@@ -103,12 +132,23 @@ class Config:
             context_hard_limit=hard_limit,
             context_compact=bool(_int("CONTEXT_COMPACT")),
             repo_map=bool(_int("REPO_MAP")),
-            repo_map_tokens=_int("REPO_MAP_TOKENS"),
+            repo_map_tokens=map_tokens,
             max_total_tokens=_int("MAX_TOTAL_TOKENS"),
             request_timeout=_int("LLM_REQUEST_TIMEOUT"),
             price_per_mtokens=_float("PRICE_PER_MTOKENS"),
             trace_path=trace_path,
+            execution_backend=backend,
+            docker_image=_str("DOCKER_IMAGE") or str(DEFAULTS["DOCKER_IMAGE"]),
+            docker_network=_str("DOCKER_NETWORK"),
+            checkpoints=bool(_int("CHECKPOINTS")),
+            memory_dir=memory_dir,
         )
+
+    @property
+    def memory_root(self) -> Path:
+        """记忆 / 快照 / 会话快照的唯一落盘位置。§3.4、§3.6 的所有路径都从这里派生。"""
+        mem = Path(self.memory_dir).expanduser()
+        return mem if mem.is_absolute() else self.project_root / mem
 
     def redacted(self) -> dict[str, Any]:
         """可安全打印 / 写进 trace 的配置视图 —— 密钥永不进日志。"""
@@ -127,6 +167,11 @@ class Config:
             "repo_map_tokens": self.repo_map_tokens,
             "price_per_mtokens": self.price_per_mtokens,
             "trace_path": str(self.trace_path) if self.trace_path else None,
+            "execution_backend": self.execution_backend,
+            "docker_image": self.docker_image,
+            "docker_network": self.docker_network,
+            "checkpoints": self.checkpoints,
+            "memory_root": str(self.memory_root),
         }
 
     def with_root(self, project_root: Path) -> "Config":
@@ -163,6 +208,16 @@ def _int(name: str) -> int:
         return int(raw)
     except ValueError as exc:
         raise ConfigError(f"{name} 必须是整数，当前值：{raw!r}") from exc
+
+
+def _str(name: str) -> str:
+    """字符串型旋钮。区分"没设"与"设成空串"：`DOCKER_NETWORK=` 是刻意的"不限制网络"，
+    用 `_get()` 的 `or 缺省` 会把这个空值吃回 "none"，于是用户怎么写都不生效 ——
+    不生效的配置项比缺失的配置项更坏（SPEC v2 §7.2 行 12 的教训）。"""
+    raw = os.getenv(name)
+    if raw is None:
+        return str(DEFAULTS[name])
+    return raw.strip()
 
 
 def _float(name: str) -> float:

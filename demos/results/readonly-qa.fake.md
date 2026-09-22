@@ -33,9 +33,9 @@
 ```text
 先看仓库形状，再定位实现。
 ✓ find_files  **/*.py  1ms
-✓ search_text format_duration  12ms
+✓ search_text format_duration  4ms
 ✓ read_file   duration/format.py  1ms
-✓ read_file   README.md  1ms
+✓ read_file   README.md  2ms
 **超过一天的输出是错的。**
 
 `duration/format.py:15` 里切「天」用的除数是 `SECONDS_PER_HOUR`：

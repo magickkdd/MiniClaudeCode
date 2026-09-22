@@ -16,7 +16,7 @@
 | 失败模式 | — |
 | 上下文峰值 | 0 tokens |
 | 权限模式 | `auto`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |
-| wall time | 2.5s |
+| wall time | 3.6s |
 | trace | `demos/traces/codegen.fake.jsonl` |
 | 工作副本 | `demos/.work/codegen`（判定就在这个目录跑） |
 
@@ -42,15 +42,15 @@
   [ ] 写 pytest 用例并跑绿
   [ ] 在 README 写清用法与不做什么
 先建包：四个运算和表达式求值放 `calculator/core.py`，测试另放一处。
-✓ write_file  calculator/__init__.py  1ms
+✓ write_file  calculator/__init__.py  2ms
 ✓ write_file  calculator/core.py  1ms
 ✓ write_file  tests/test_calculator.py  1ms
-✓ run_tests     1.2s
+✓ run_tests     1.3s
 `2 + 3 * 4` 得到 20，说明我按从左到右一路算了。改成两遍扫描：先折叠乘除，再算加减。
 ✓ write_file  calculator/core.py  1ms
 ✓ run_tests     1.2s
 全绿。把用法和「不做括号」这条边界写进 README，省得后来人猜。
-✓ write_file  README.md  3ms
+✓ write_file  README.md  12ms
 ✓ write_todos 4 步  0ms
 任务清单
   [x] 建 calculator 包：四则运算 + DivideByZeroError

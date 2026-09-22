@@ -6,17 +6,19 @@
 "失败 → 分析 → 修改 → 重跑"的闭环，也让评测能用退出码客观判定成功。
 
 is_error 语义与 bash 一致：测试失败不是工具失败（见 bash.py 顶部说明）。
+执行同样经 `ExecutionBackend`（SPEC v2 §3.6）—— 这里的命令是 argv 序列，
+所以本地后端仍然不过 shell，与 v1 的行为逐字相同。
 """
 
 from __future__ import annotations
 
-import os
 import re
-import subprocess
 import sys
 import time
 from typing import Any
 
+from miniclaude.backend.local import LocalBackend
+from miniclaude.backend.protocol import ExecutionBackend
 from miniclaude.tools.base import BaseTool, RiskLevel, ToolResult
 
 # pytest 的计数出现在同一行里（"2 failed, 10 passed in 1.2s"），所以不能用行首锚定。
@@ -46,6 +48,10 @@ class RunTestsTool(BaseTool):
     }
     risk_level = RiskLevel.EXECUTE
 
+    def __init__(self, workspace: Any, backend: ExecutionBackend | None = None) -> None:
+        super().__init__(workspace)
+        self.backend: ExecutionBackend = backend or LocalBackend()
+
     def run(
         self,
         *,
@@ -53,11 +59,11 @@ class RunTestsTool(BaseTool):
         extra_args: list[str] | None = None,
         timeout: int = 120,
     ) -> ToolResult:
-        probe = subprocess.run(  # noqa: S603
-            [sys.executable, "-m", "pytest", "--version"],
-            cwd=str(self.ws.root), capture_output=True, text=True, timeout=30, check=False,
+        env = {"PYTHONDONTWRITEBYTECODE": "1"}
+        probe = self.backend.exec(
+            [sys.executable, "-m", "pytest", "--version"], cwd=self.ws.root, timeout=30, env=env
         )
-        if probe.returncode != 0:
+        if not probe.ran or probe.returncode != 0:
             return ToolResult.err(
                 "这个环境里跑不了 pytest。请先用 bash 执行 "
                 f"`{sys.executable} -m pip install pytest`，再重试。"
@@ -69,20 +75,16 @@ class RunTestsTool(BaseTool):
         for item in extra_args or []:
             argv.append(str(item))
 
-        env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"}
         started = time.perf_counter()
-        try:
-            completed = subprocess.run(  # noqa: S603
-                argv, cwd=str(self.ws.root), capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=max(5, min(int(timeout), 600)),
-                env=env, check=False,
-            )
-        except subprocess.TimeoutExpired:
+        completed = self.backend.exec(argv, cwd=self.ws.root, timeout=max(5, min(int(timeout), 600)), env=env)
+        if completed.timed_out:
             return ToolResult.err("测试执行超时被终止。用 target 缩小范围，或加 -k 只跑相关用例。")
-        except OSError as exc:
-            return ToolResult.err(f"无法启动测试进程：{type(exc).__name__}: {exc}")
+        if completed.launch_error:
+            return ToolResult.err(f"无法启动测试进程：{completed.launch_error}")
 
         elapsed = time.perf_counter() - started
+        # 不用 BackendResult.output：它替 bash 兜了一句"(无输出)"，而这里的 `_format`
+        # 要拿空串区分"pytest 什么都没打印"和"打印了但没汇总行"。
         output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
         return ToolResult.ok(self._format(completed.returncode, output, elapsed, target))
 

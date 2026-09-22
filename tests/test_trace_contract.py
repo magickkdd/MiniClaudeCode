@@ -355,6 +355,77 @@ def mapped(tmp_path_factory: Any) -> list[dict[str, Any]]:
     return records
 
 
+# §3.6 的执行后端与可恢复现场。一批两个调用：写（call_0）+ 读（call_1）——
+# 于是"崩在批次中间"这份现场是真的能拼出来的（只保留那条助手消息，done 里只留 call_0）。
+DURABLE_SCRIPT = [
+    scripted_tool_calls(
+        [("write_file", {"path": "made.py", "content": "VALUE = 1\n"}), ("read_file", {"path": "notes.txt"})]
+    ),
+    scripted_final_text("写完并撤掉了。"),
+]
+
+
+@pytest.fixture(scope="module")
+def durable(tmp_path_factory: Any) -> list[dict[str, Any]]:
+    """`backend` / `checkpoint` / `session_snapshot` / `session_replay` 的产地。
+
+    这里走 `cli.main.build_session` 而不是手搓 Agent：`backend` 那条事件是**装配层**写的，
+    测试自己 `tracer.log("backend", ...)` 等于把形状抄一遍 —— 装配改了这里不会红。
+
+    `session_replay` 只能来自"崩在一批调用的中间"：新响应里的重复 id 会先被
+    `dedupe_tool_use_ids` 改名（配对不变式要求全历史唯一 id），所以只有**已在历史里**的
+    尾部批次才可能命中 `done_call_ids`。于是这份现场是真的从磁盘绕了一圈再装回去的。
+    """
+    from dataclasses import replace
+
+    from miniclaude.backend.sessions import SESSIONS_DIRNAME, SessionLog
+    from miniclaude.cli.main import build_session
+    from miniclaude.cli.render import Renderer
+    from miniclaude.config import Config
+
+    root = tmp_path_factory.mktemp("durable")
+    (root / "notes.txt").write_text("第一行\n第二行\n", encoding="utf-8")
+    log = SessionLog(root=root / ".mcc" / SESSIONS_DIRNAME)
+
+    def assemble(trace: Path, responses: list[Any]) -> Any:
+        return build_session(
+            config=Config(
+                base_url="https://mock.local/v1",
+                api_key="sk-test-abcdefghijklmn",
+                model="mock-model",
+                project_root=root,
+                trace_path=trace,
+            ),
+            renderer=Renderer(write=lambda _text: None, use_rich=False),
+            llm=FakeLLM(responses),
+            mode=PermissionMode.AUTO,
+        )
+
+    first = assemble(root / ".traces" / "first.jsonl", DURABLE_SCRIPT)
+    first.agent.run("写一个 made.py 再读一眼 notes.txt，然后收尾")
+    ok, why = first.agent.undo_last_write()
+    assert ok, f"写完就该撤得回去，这次撤不掉：{why}"
+    clean, why = log.load(first.tracer.session_id)
+    assert clean is not None, f"副作用落过盘却没有现场可恢复：{why}"
+    records = list(replay(root / ".traces" / "first.jsonl"))
+
+    # 崩在批次中间：历史停在"助手声明了 2 个调用"，账上只有第 1 个做完了。
+    crash = replace(clean, messages=clean.messages[:2], done_call_ids=["call_0"], termination="")
+    assert log.save(crash), f"现场写不回去：{log.degraded}"
+    restored, why = log.load(crash.session_id)
+    assert restored is not None, why
+
+    second = assemble(root / ".traces" / "second.jsonl", [scripted_final_text("补完就收尾。")])
+    second.agent.restore_session(restored)
+    second.agent.resume()
+    records += replay(root / ".traces" / "second.jsonl")
+
+    kinds = {str(record.get("kind")) for record in records}
+    missing = {"backend", "checkpoint", "session_snapshot", "session_replay"} - kinds
+    assert not missing, f"这次装配没产出 {sorted(missing)} —— 快照会悄悄不再看守这些 kind"
+    return records
+
+
 # --------------------------------------------------------------- 不变式
 
 
@@ -447,7 +518,7 @@ def test_live_and_offline_classification_agree(session: Any) -> None:
 
 
 def test_trace_schema_snapshot(
-    session: Any, broken: Any, compacting: Any, refusing: Any, mapped: Any
+    session: Any, broken: Any, compacting: Any, refusing: Any, mapped: Any, durable: Any
 ) -> None:
     """每个 kind 的字段集合与快照逐字段比对。
 
@@ -455,12 +526,12 @@ def test_trace_schema_snapshot(
     重生成 `tests/schema_v2.json`，再同步 SPEC v2 §3.1 的事件表 —— 两处不一致就是
     "文档说的和代码做的不是一回事"，v1 的 `session_end` 事故（§0.3 E3）正是这么发生的。
 
-    五条会话各带一段形状：`session` 是正常流程，`broken` 只在那里出现的 `error`，
+    六条会话各带一段形状：`session` 是正常流程，`broken` 只在那里出现的 `error`，
     `compacting` 提供 `context_compact`，`refusing` 提供 `context_refuse`，
-    `mapped` 提供 `repo_map`。少一条，快照上就少一个无人看守的 kind。
+    `mapped` 提供 `repo_map`，`durable` 提供 §3.6 的四条。少一条，快照上就少一个无人看守的 kind。
     """
     actual = _keys_by_kind(
-        list(session[0]) + list(broken) + list(compacting) + list(refusing) + list(mapped)
+        list(session[0]) + list(broken) + list(compacting) + list(refusing) + list(mapped) + list(durable)
     )
     for kind, keys in sorted(actual.items()):
         assert keys >= COMMON_ENVELOPE, f"{kind} 缺了公共字段：{sorted(COMMON_ENVELOPE - keys)}"
