@@ -40,7 +40,9 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "src"), str(ROOT / "demos")]
+sys.path[:0] = [str(ROOT / "src"), str(ROOT / "demos"), str(ROOT / "scripts")]
+
+from _evidence import write_evidence  # noqa: E402
 
 from miniclaude.cli import eval_cmd  # noqa: E402
 from miniclaude.infra.trace import replay  # noqa: E402
@@ -411,6 +413,31 @@ def _display(path: Path) -> str:
         return str(path)
 
 
+def _metrics(payload: dict[str, Any]) -> dict[str, Any]:
+    """盘上那份和新这份共用的尺：只量覆盖，不量结论 —— 判据翻红必须写得进去。
+
+    live 那 3 条由 `unsign_live_guard` 在**花钱之前**就把住，这里再设一个哨兵是第二道：
+    它管的是"跑完之后、写盘之前"掉的那些数（少了臂、少了压缩单测、少了请求）。
+    """
+    clauses = payload.get("clauses", [])
+    live = payload.get("live") or {}
+    return {
+        "clauses": len(clauses),
+        "measured": sum(1 for clause in clauses if clause.get("ok") is not None),
+        "arms": len(payload.get("arms", {})),
+        "compression_tests": len(payload.get("compression_tests", {})),
+        "live_requests": live.get("requests_sent", 0),
+    }
+
+
+def _probe_metrics(payload: dict[str, Any]) -> dict[str, Any]:
+    samples = payload.get("samples", [])
+    return {
+        "samples": len(samples),
+        "requests": sum(sample.get("requests_sent", 0) for sample in samples),
+    }
+
+
 def unsign_live_guard(live_repeats: int) -> int | None:
     """不带 --live 时，禁止把已签字的 live 判据静默削掉。返回退出码表示要停。
 
@@ -443,14 +470,25 @@ def main() -> int:
     parser.add_argument("--probe-budget", type=int, default=PROBE_BUDGET, help="探针那一次运行的上下文预算")
     parser.add_argument("--probe-from", type=Path, default=None,
                         help="只量一个已经跑完的批次目录（不花额度），作为新样本追加进探针账")
+    parser.add_argument(
+        "--allow-thinning",
+        action="store_true",
+        help="明知证据变薄也写盘（缩水条目会打到 stderr，SPEC/README 里欠一段说明）",
+    )
     args = parser.parse_args()
 
     if args.probe or args.probe_from is not None:
         payload = run_probe(args.probe_budget, args.probe_from)
-        PROBE_RESULT.parent.mkdir(parents=True, exist_ok=True)
-        PROBE_RESULT.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        if not write_evidence(
+            PROBE_RESULT,
+            payload,
+            _probe_metrics,
+            exact=("samples",),
+            allow_thinning=args.allow_thinning,
+            note="探针账本是累积的：一次重跑少一个样本，结论的 n 就悄悄变了。",
+            sort_keys=True,
+        ):
+            return 2
         print(f"→ 探针账本 {payload['context_budget']:,} 预算（L1 线 {payload['l1_trigger_line']:,}）"
               f"· 样本 {len(payload['samples'])} 个")
         for line in payload["reading"]:
@@ -574,8 +612,16 @@ def main() -> int:
             clause["ok"] for clause in payload["clauses"] if clause["ok"] is not None
         )
 
-    RESULT.parent.mkdir(parents=True, exist_ok=True)
-    RESULT.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    if not write_evidence(
+        RESULT,
+        payload,
+        _metrics,
+        exact=("clauses", "measured", "arms", "compression_tests", "live_requests"),
+        allow_thinning=args.allow_thinning,
+        note="三臂（off/on/tight）少一臂就不是同一个实验了；要重签 live 就加 --live。",
+        sort_keys=True,
+    ):
+        return 2
 
     print()
     for clause in payload["clauses"]:

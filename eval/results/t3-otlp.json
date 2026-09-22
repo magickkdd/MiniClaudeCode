@@ -453,7 +453,7 @@
       "lost": "`tool_use_id` 与它对应的 `session_replay` / `checkpoint` 之间的引用关系。"
     }
   ],
-  "generated_at": "2026-09-23T04:19:32+0800",
+  "generated_at": "2026-09-23T04:48:37+0800",
   "live_tokens_spent": 0,
   "pass": true,
   "per_trace": [
@@ -3142,7 +3142,7 @@
   "unmeasured": [
     "a_real_collector_accepts_the_payload"
   ],
-  "wall_seconds": 5.52,
+  "wall_seconds": 5.36,
   "what_this_does_not_prove": [
     "真实收集端收下并画出树 —— http://localhost:4318/v1/traces 回了 HTTP 502（响应体是空的）。按**未量**记账而不是判 ✗：不是 OTLP 的服务和没人应答的端口，都不构成'我们的 payload 被拒'的证据（见 a_real_collector_accepts_the_payload；探针发的是手写的 4 条记录，不带仓库内容）",
     "逐字段核对覆盖 6,964 个值，但 213 个 null 是**跳过**的：",

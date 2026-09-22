@@ -21,8 +21,9 @@ SPEC v2 §7.3-3 的原话是「字段已在 S8 对齐，这一步只有翻译」
   对应的 detector 必须红：吃值、造名、空串冒充 null、漏密钥、改边、错挂边、伪造时长、抹戳、
   资源属性与 trace 不符、往收集端探针的 payload 里塞一条绝对路径。
   红不了的 detector 给出的 ✓ 等于零 —— 这一节是给上面那些 ✓ 定价的。
-· **写盘之前先跟盘上那份比**（`_thinning_guard`）。README §10 第 30 行记着这条守卫
-  原先只有 `b2_compact_ab.py` 有；这里再加一处，并让"变薄"的定义写在证据自己身上。
+· **写盘之前先跟盘上那份比**（`scripts/_evidence.py` 的 `write_evidence`）。README §10 第 30 行
+  记着这条守卫原先只有 `b2_compact_ab.py` 有；现在四个写证据的脚本共用一把尺，
+  而"变薄"的定义写在每个脚本自己的 `_metrics()` 里 —— 只量覆盖，不量结论。
 · **"本机没有收集端"这一句是量出来的**（`_collector`，默认打 `localhost:4318`）。发出去的是
   手写 4 条记录翻出来的最小 payload，不是语料里那份带 59 个绝对路径的真轨迹 —— 未量的理由
   不能是一句背下来的话，也不必拿仓库内容去换。远端 host 一律不代发。
@@ -47,8 +48,9 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "src")]
+sys.path[:0] = [str(ROOT / "src"), str(ROOT / "scripts")]
 
+from _evidence import write_evidence  # noqa: E402
 from miniclaude.cli import trace_cmd  # noqa: E402
 from miniclaude.config import Config  # noqa: E402
 from miniclaude.infra import otel  # noqa: E402
@@ -1136,30 +1138,21 @@ def _clauses(
     ]
 
 
-def _thinning_guard(totals: dict[str, Any]) -> str | None:
-    """已入库的证据不许悄悄变薄（README §10 第 30 行的第二条）。
+def _metrics(document: dict[str, Any]) -> dict[str, Any]:
+    """盘上那份和新这份共用的尺：只量覆盖，不量结论 —— 判据翻红必须写得进去。
 
-    变薄的定义写在下面三条：corpus 少文件、判据少条数、核对过的字段值/属性数掉到九成以下。
-    这三样任何一样掉下去，这份 JSON 的形状看起来仍然完整、比例数字还会更漂亮 ——
-    所以只能靠跟盘上那份比，不能靠看。
+    `files` 一个都不许掉（少一份轨迹就是换了实验对象，而所有比例数字还会更好看）；
+    `records` / `fields_checked` / `attributes` 留九成容差，换探针靶子会让它们抖一点。
     """
-    if not RESULT.exists():
-        return None
-    prior = json.loads(RESULT.read_text(encoding="utf-8"))
-    before = prior.get("totals", {})
-    shrinking = [
-        f"{key}：{before.get(key, 0):,} → {totals[key]:,}"
-        for key in ("files", "records", "fields_checked", "attributes")
-        if totals[key] < before.get(key, 0) * (1 if key == "files" else 0.9)
-    ]
-    if totals["clauses_count"] < len(prior.get("clauses", [])):
-        shrinking.append(f"clauses：{len(prior.get('clauses', []))} → {totals['clauses_count']}")
-    if not shrinking:
-        return None
-    return (
-        f"✗ {RESULT.name} 已入库的证据这次变薄了：" + "；".join(shrinking)
-        + "\n  覆盖范围缩水会让所有比例数字变好看 —— 拒绝覆盖（确有其事就改判据并在 SPEC 里写明为什么）。"
-    )
+    totals = document.get("totals", {})
+    return {
+        "files": totals.get("files", 0),
+        "records": totals.get("records", 0),
+        "fields_checked": totals.get("fields_checked", 0),
+        "attributes": totals.get("attributes", 0),
+        "clauses": len(document.get("clauses", [])),
+        "probes": len(document.get("detector_probes", [])),
+    }
 
 
 def main() -> int:
@@ -1171,6 +1164,11 @@ def main() -> int:
     )
     parser.add_argument("--probe-trace", default=None, help="用这份轨迹做 detector 探针（默认挑记录最多的 v2 轨迹）")
     parser.add_argument("--limit", type=int, default=0, help="只翻前 N 份（调试用，会被变薄守卫拒写）")
+    parser.add_argument(
+        "--allow-thinning",
+        action="store_true",
+        help="明知证据变薄也写盘（缩水条目会打到 stderr，SPEC/README 里欠一段说明）",
+    )
     args = parser.parse_args()
 
     traces = _tracked_traces()
@@ -1207,10 +1205,6 @@ def main() -> int:
     clauses = _clauses(digests, totals, collector, cli, probes, str(probe_path.relative_to(ROOT)))
     totals["clauses_count"] = len(clauses)
 
-    if warning := _thinning_guard(totals):
-        print(warning, file=sys.stderr)
-        return 2
-
     document = {
         "schema": 1,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -1244,11 +1238,19 @@ def main() -> int:
         "属性名对齐 GenAI 语义约定这件事由 FIELD_MAP 与单测钉住，不代表收集端按约定的方式解释它们",
         "payload 里带着绝对本地路径与端点地址（`mcc.session.config`），这份证据不证明跨机发送是安全的",
     ]
-    RESULT.parent.mkdir(parents=True, exist_ok=True)
-    # 写字节：证据文件也要一份 sha 对得上，文本模式在 Windows 上会换行 → 同一个 JSON 两个指纹。
-    RESULT.write_bytes(
-        (json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    )
+
+    if not write_evidence(
+        RESULT,
+        document,
+        _metrics,
+        exact=("files", "clauses", "probes"),
+        allow_thinning=args.allow_thinning,
+        note=(
+            "--limit 只翻前几份是调试用的，它产出的那份不是同一件事的证据 —— 别让它覆盖入库那份。"
+        ),
+        sort_keys=True,
+    ):
+        return 2
 
     for clause in clauses:
         mark = {True: "✓", False: "✗", None: "?"}[clause["ok"]]

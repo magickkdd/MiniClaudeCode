@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -29,8 +30,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "src"), str(ROOT / "demos")]
+sys.path[:0] = [str(ROOT / "src"), str(ROOT / "demos"), str(ROOT / "scripts")]
 
+from _evidence import write_evidence  # noqa: E402
 from fakes import FakeLLM, scripted_final_text, scripted_tool_calls  # noqa: E402
 from miniclaude.agent.permissions import Answer, PermissionGate, PermissionMode  # noqa: E402
 from miniclaude.cli.main import build_session  # noqa: E402
@@ -662,7 +664,29 @@ def _flat(record: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in record.items() if key not in noise}
 
 
+def _metrics(payload: dict[str, Any]) -> dict[str, Any]:
+    """盘上那份和新这份共用的尺：只量覆盖，不量结论。
+
+    守卫管的是"这一条还量不量得出来"，不管"这一条成不成立" —— 判据真翻了红必须写得进去，
+    那正是证据的存在理由。SDK 那一臂取决于**当前解释器**装没装官方 `mcp`，它掉线时
+    premise 条数不变、三条一起变成未量（`ok: null`），所以比的是 `measured`。
+    """
+    premises = payload.get("premises", [])
+    return {
+        "premises": len(premises),
+        "measured": sum(1 for item in premises if item.get("ok") is not None),
+    }
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="生成 S14 验收证据（MCP bridge + Skills）")
+    parser.add_argument(
+        "--allow-thinning",
+        action="store_true",
+        help="明知证据变薄也写盘（缩水条目会打到 stderr，SPEC/README 里欠一段说明）",
+    )
+    args = parser.parse_args()
+
     started = time.perf_counter()
     shutil.rmtree(WORK, ignore_errors=True)
     WORK.mkdir(parents=True, exist_ok=True)
@@ -719,8 +743,18 @@ def main() -> int:
         ),
     }
 
-    RESULT.parent.mkdir(parents=True, exist_ok=True)
-    RESULT.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    if not write_evidence(
+        RESULT,
+        payload,
+        _metrics,
+        exact=("premises", "measured"),
+        allow_thinning=args.allow_thinning,
+        note=(
+            "SDK 那一臂要看当前解释器装没装官方 mcp：换错 python（没装 dev extra 的那个）"
+            "就会把三条量过的变成未量。跑批用 .venv/Scripts/python.exe。"
+        ),
+    ):
+        return 2
 
     marks = {True: "x", False: "!", None: "?"}
     for item in premises:

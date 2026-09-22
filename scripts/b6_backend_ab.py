@@ -41,8 +41,9 @@ from pathlib import Path
 from typing import Any, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "src"), str(ROOT / "demos")]
+sys.path[:0] = [str(ROOT / "src"), str(ROOT / "demos"), str(ROOT / "scripts")]
 
+from _evidence import write_evidence  # noqa: E402
 from miniclaude.cli import eval_cmd  # noqa: E402
 from miniclaude.eval.runner import RunRecord  # noqa: E402
 from miniclaude.infra.trace import replay  # noqa: E402
@@ -364,6 +365,23 @@ def compare(left: dict[str, Any], right: dict[str, Any]) -> tuple[list[dict[str,
     return divergent, len(keys)
 
 
+def _metrics(payload: dict[str, Any]) -> dict[str, Any]:
+    """盘上那份和新这份共用的尺：只量覆盖，不量结论。
+
+    判「一致率」的那几格是结论侧，掉下去必须写得进去（那是 B6 真失败的样子）；
+    覆盖侧不一样：`compared` 是"两臂各跑了同一批任务的几个格子"，一次忘了带
+    `--repeats 2` 的重跑就把它砍半，而 `rate` 还会是漂亮的 1.0。
+    """
+    premises = payload.get("premises", [])
+    agreement = payload.get("agreement") or {}
+    return {
+        "premises": len(premises),
+        "measured": sum(1 for item in premises if item.get("ok") is not None),
+        "compared": agreement.get("compared", 0),
+        "docker_launches": payload.get("docker_launches", 0),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="b6_backend_ab", description=__doc__.splitlines()[0])
     parser.add_argument("--engine", choices=("fake", "live"), default="fake")
@@ -378,6 +396,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="允许 docker 臂降级成 local（默认拒绝：两臂同为 local 的'一致'是假的）",
     )
     parser.add_argument("--keep", action="store_true", help="保留 eval/.work/b6-ab 里的中间产物")
+    parser.add_argument(
+        "--allow-thinning",
+        action="store_true",
+        help="明知证据变薄也写盘（缩水条目会打到 stderr，SPEC/README 里欠一段说明）",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     tag = "" if args.all else args.tag
@@ -531,8 +554,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "pass" if all(item["ok"] for item in premises) and not divergent else "fail"
     )
 
-    RESULT.parent.mkdir(parents=True, exist_ok=True)
-    RESULT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not write_evidence(
+        RESULT,
+        payload,
+        _metrics,
+        exact=("premises", "measured", "compared"),
+        allow_thinning=args.allow_thinning,
+        note=(
+            "少一格对比就是少一格证据：要么把命令补回盘上那份的规模（它的 repeats/tag/arms 自己写着），"
+            "要么就让它红着写进去 —— 但别让它悄悄变少。"
+        ),
+    ):
+        return 2
 
     print(
         f"两臂实际后端：local={local_backend or '?'} docker={docker_backend or '?'} · "

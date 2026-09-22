@@ -38,8 +38,9 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "src"), str(ROOT / "demos")]
+sys.path[:0] = [str(ROOT / "src"), str(ROOT / "demos"), str(ROOT / "scripts")]
 
+from _evidence import write_evidence  # noqa: E402
 from miniclaude.agent.prompts import build_system_prompt  # noqa: E402
 from miniclaude.cli import eval_cmd  # noqa: E402
 from miniclaude.eval.metrics import summarize_batch  # noqa: E402
@@ -479,6 +480,15 @@ def b3_verdict(passed: bool, mechanism: list[dict], live: list[dict]) -> str:
     return "；".join(parts)
 
 
+# 只有真端点跑得出来的那 4 条：变薄守卫拿它们当"live 半条还在不在"的哨兵。
+_LIVE_CLAUSES = frozenset({
+    "steps_to_success_median_drops_20pct",
+    "context_peak_p95_rise_le_15pct",
+    "on_arm_does_not_win_by_losing_tasks",
+    "every_run_in_both_arms_is_judged",
+})
+
+
 def build_live_clauses(off: dict, on: dict, paired: dict) -> list[dict]:
     """因果层：B3 那两句。缺了这一层，B3 只能标成未达成。"""
     o_steps, n_steps = off["steps_median"], on["steps_median"]
@@ -531,12 +541,33 @@ def build_live_clauses(off: dict, on: dict, paired: dict) -> list[dict]:
 # ------------------------------------------------------------------ 主流程
 
 
+def _metrics(payload: dict[str, Any]) -> dict[str, Any]:
+    """盘上那份和新这份共用的尺：只量覆盖，不量结论 —— 判据翻红必须写得进去。
+
+    live 那 4 条只有真端点跑得出来，一次"只想看看 fake 侧"的重跑会把它们连 `clauses`
+    一起静默削掉，所以 `live_signed` 单列一个哨兵：条数还没掉到容差以下时它就先掉了。
+    """
+    clauses = payload.get("clauses", [])
+    ids = {clause.get("id") for clause in clauses}
+    return {
+        "clauses": len(clauses),
+        "measured": sum(1 for clause in clauses if clause.get("ok") is not None),
+        "tasks": len((payload.get("a1_class") or {}).get("tasks", [])),
+        "live_signed": len(_LIVE_CLAUSES & ids),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="生成 B3 验收证据（RepoMap on vs off）")
     parser.add_argument("--live", action="store_true", help="跑真实端点两臂（B3 的因果半条，会花额度）")
     parser.add_argument("--live-repeats", type=int, default=3, help="live 每题重复次数（两臂同一值）")
     parser.add_argument("--live-budget-tokens", type=int, default=1_300_000, help="单臂整批 token 硬上限")
     parser.add_argument("--reuse", action="store_true", help="不清空工作目录，让 runner 从 manifest 续跑")
+    parser.add_argument(
+        "--allow-thinning",
+        action="store_true",
+        help="明知证据变薄也写盘（缩水条目会打到 stderr，SPEC/README 里欠一段说明）",
+    )
     args = parser.parse_args()
     if args.live_repeats < 1:
         print("--live-repeats 至少 1", file=sys.stderr)
@@ -638,8 +669,16 @@ def main() -> int:
                 f"通过 {row['off_passes']}/{row['on_passes']} · peak {row['off_peak_mean']:,}→{row['on_peak_mean']:,}"
             )
 
-    RESULT.parent.mkdir(parents=True, exist_ok=True)
-    RESULT.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    if not write_evidence(
+        RESULT,
+        payload,
+        _metrics,
+        exact=("clauses", "measured", "tasks", "live_signed"),
+        allow_thinning=args.allow_thinning,
+        note="要重签 live 那 4 条就加 --live（两臂 × 3 次，会花额度）。",
+        sort_keys=True,
+    ):
+        return 2
 
     print("")
     for clause in payload["clauses"]:
