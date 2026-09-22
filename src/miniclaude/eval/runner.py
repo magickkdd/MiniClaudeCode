@@ -3,8 +3,10 @@
 四个设计决定都是**代价换确定性**，写在这里免得日后被"顺手优化"掉：
 
 * `workers=1`：并行打同一端点会把限流抖动混进"配置 A vs 配置 B"的比较里。
-* **每条 run 一落盘就 append 到 `manifest.jsonl`**：断点续跑靠的是这行，
+* **每条 run 一落盘就重写 `manifest.jsonl`（同名键取代旧行）**：断点续跑靠的是这行，
   不是靠跑完再写。72 次 live 跑到第 50 次崩了要能接着跑，这是 B1 的字面要求。
+  取代而非叠加，是因为 trace 文件名按 `(task, repeat, engine)` 定、重跑会覆盖上一份轨迹；
+  纯 append 就是让一行判据指向一条已经不存在的轨迹。
 * **批次预算** `budget_tokens` 是整批硬上限，与单任务的 `token_ceiling` 不是一回事。
   没有它，一次失手的 live 批次能在一夜之间把预算花掉两倍。
 * **失败关闭**：批跑没有人类确认者，`confirmer` 恒返回"拒绝"，权限模式取
@@ -15,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -352,9 +355,31 @@ class EvalRunner:
         return out
 
     def append_manifest(self, record: RunRecord) -> None:
-        with self.manifest.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
-            handle.flush()
+        """落一条 run。**同名键（task, repeat）的旧行被这一行取代**，不是叠加。
+
+        trace 文件名按 (task, repeat, engine) 定，重跑是**覆盖**上一份。所以纯 append 会让
+        早先那行指向一条已经不存在的轨迹：报表把一条轨迹数成两条，§3.9 的导出器则会给它
+        配上别人的 reward —— 已经在这批数据上抓到 26 例。整份原子重写（tmp + `os.replace`）：
+        写坏了最多是退回上一版，不会留下一半的一份。读不懂的行原样留着 —— 那是证据，
+        哪怕它已经不是一条可用的记录。
+        """
+        lines: list[str] = []
+        if self.manifest.is_file():
+            for line in self.manifest.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    raw = None
+                if isinstance(raw, dict) and (raw.get("task_id"), raw.get("repeat")) == record.key:
+                    continue
+                lines.append(json.dumps(raw, ensure_ascii=False) if raw is not None else line)
+        lines.append(json.dumps(record.to_dict(), ensure_ascii=False))
+        self.manifest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.manifest.with_suffix(".jsonl.tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(tmp, self.manifest)
 
     def base_config(self) -> Config:
         """跑批这一臂的基配置（还没按任务改写 project_root / max_turns 的那一份）。

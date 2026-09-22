@@ -72,6 +72,9 @@ HELP = """命令：
   mcc mcp --json                       机器可读的那份
   mcc skills                          列出技能目录与常驻/按需的字符数
 
+  mcc export-rl --batch <目录> --out <文件>   跑过的轨迹 → (state, action, reward) JSONL（§3.9）
+  mcc export-rl --batch ... --evidence <文件> 顺带把自证前提写成一份 JSON
+
   mcc eval --list                   列出考题与题集哈希
   mcc eval --lint                   考题自检：这道题**可能**被做对吗
   mcc eval                          fake 引擎跑全批（不读 .env、不打网络、秒级）
@@ -819,11 +822,20 @@ def _skills_entry(argv: Sequence[str]) -> int:
     return ext_cmd.skills_entry(argv, config)
 
 
+def _export_rl_entry(argv: Sequence[str]) -> int:
+    """`mcc export-rl` —— 读盘上的 trace 与 manifest 写一份 RL 数据。不碰配置：
+    它一行模型都不调，排查数据时才不该被 `.env` 缺字段挡住。
+    """
+    from miniclaude.eval import export_rl
+
+    return export_rl.run(argv)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """命令行入口：无参进 REPL，给了任务则跑一轮并用退出码交代结果。
 
-    `trace` / `eval` / `resume` / `mcp` / `skills` 是子命令，放在最前面分流：`trace`
-    只读日志，排查一次烧了 8 万 token 的会话时不该再依赖 LLM 配置可用；`eval` 自己管
+    `trace` / `eval` / `resume` / `mcp` / `skills` / `export-rl` 是子命令，放在最前面分流：
+    `trace` 只读日志，排查一次烧了 8 万 token 的会话时不该再依赖 LLM 配置可用；`eval` 自己管
     引擎与配置，fake 模式连 `.env` 都不需要；`resume` 要读现场，所以它得先于
     positional 解析被摘走（否则 "resume" 会被当成一条任务发给模型）。`mcp` 与 `skills`
     同理 —— 不给分流的话，"mcp" 会被当成一次性任务发给模型。
@@ -839,6 +851,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _mcp_entry(raw[1:])
     if raw and raw[0] == "skills":
         return _skills_entry(raw[1:])
+    if raw and raw[0] == "export-rl":
+        return _export_rl_entry(raw[1:])
 
     args = build_parser().parse_args(raw)
 

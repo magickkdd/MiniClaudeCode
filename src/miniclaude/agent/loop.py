@@ -163,6 +163,15 @@ class Agent:
         self.recorder = recorder
         self.checkpoints = checkpoints
         self.done_call_ids: set[str] = set()
+        # 「这一步在**上一个进程**里已经做完了」是一个只有恢复现场才能成立的事实。
+        # 它不能由 `done_call_ids` 代答：那个集合在本进程每执行一次调用就会增长，而
+        # `dedupe_tool_use_ids` 的名字（`call_0` → `call_0~0` → …）在 L2 摘要把带旧名的
+        # 消息整组删掉之后会重新发一次 `call_0` —— 于是同一次进程里一条全新的写入会被
+        # 认成重放、直接跳过（B2 的 on 臂在第 13~18 轮栽过，判据 fail 而 trace 看着一切
+        # 正常；那份现场已被修复后的重跑覆盖，可复现的形式是 tests/test_resume.py 里
+        # `..._is_not_a_replay_guard` 那条）。所以：记账归 `done_call_ids`（要写进快照），
+        # 免重放的判据归这份只在 restore 时种下的集合。
+        self._restored_call_ids: set[str] = set()
         self.resumed_from = ""
         self._baseline_taken = False
         # /undo 的游标：已经撤销过几次。它属于磁盘状态而不是对话状态，所以 `/reset`
@@ -184,6 +193,7 @@ class Agent:
         self.state = AgentState()
         self.todos.items.clear()
         self.done_call_ids.clear()
+        self._restored_call_ids.clear()
         self.resumed_from = ""
         self._call_facts = []
         self._est_tokens = []
@@ -557,8 +567,10 @@ class Agent:
             call_span = new_span_id()
             args = call.input if isinstance(call.input, dict) else {}
 
-            if call.id and call.id in self.done_call_ids:
-                # 恢复现场时才会走到这里：这一次调用在上一个进程里已经做完了。
+            if call.id and call.id in self._restored_call_ids:
+                # 只有恢复现场后才可能走到这里：这一次调用在上一个进程里已经做完了。
+                # （判据不是 `done_call_ids` —— 那份账本进程也在写，而 id 会被重新发出来，
+                # 拿它当判据等于把"我自己刚做过 call_0"读成"上一个进程做过 call_0"。）
                 # 重放它 = 把 `rm`、`git push`、写文件再做一遍，不可接受；所以只回填一条
                 # 说明。**不写 tool_call 记录**：`tool_call` 的口径是"本进程执行过"，
                 # S12 的数据闸和 eval 的指标都靠它，掺进没执行过的条目就又是假数字。
@@ -856,6 +868,7 @@ class Agent:
         self.todos.items = [dict(item) for item in snapshot.load_todos()]
         self.state = _state_from_snapshot(snapshot.state)
         self.done_call_ids = {str(item) for item in snapshot.done_call_ids}
+        self._restored_call_ids = set(self.done_call_ids)
         self.resumed_from = snapshot.session_id
         if self.recorder is not None:
             self.recorder.last_checkpoint_rev = snapshot.last_checkpoint_rev

@@ -18,17 +18,27 @@ FAKE_DEMOS = [demo for demo in rd.DEMOS if demo.script is not None]
 _SELF_REPORTED_COUNT = re.compile(r"\d+\s*(?:passed|failed|个用例|个测试)")
 
 
+def _roots(tmp_path) -> dict:
+    """demo 跑起来要写的两个目录，一律指到 tmp 里。
+
+    默认值是仓库里的 `demos/traces` 与 `demos/results` —— 那两份是**证据**，覆盖它们是
+    命令行跑 demo 的应有语义，跑一次测试不该带上它（下面那条测试钉住这件事）。
+    """
+    return {"work_root": tmp_path / ".work", "artifact_root": tmp_path / "artifacts"}
+
+
+
 @pytest.mark.parametrize("demo", FAKE_DEMOS, ids=lambda demo: demo.id)
 def test_demo_passes_without_a_network(demo, tmp_path):
     """每条判定都必须自己成立：pytest 退出码、行为探测、tests/ 未被改写。"""
-    run = rd.run_demo(demo, engine="fake", work_root=tmp_path / ".work")
+    run = rd.run_demo(demo, engine="fake", **_roots(tmp_path))
     failed = [check.line() for check in run.outcome.checks if not check.ok]
     assert run.outcome.ok, f"{demo.id} 判定未通过：\n" + "\n".join(failed)
 
 
 def test_demo_actually_uses_the_tools_it_claims(tmp_path):
     """判定通过还不够，工具序列也得是那条任务该有的形状。"""
-    run = rd.run_demo(rd.demo_by_id("red-tests"), engine="fake", work_root=tmp_path / ".work")
+    run = rd.run_demo(rd.demo_by_id("red-tests"), engine="fake", **_roots(tmp_path))
     sequence = run.stats["tool_sequence"]
     assert sequence.count("run_tests") >= 3, "没有反复重跑，就不叫 self-debugging"
     assert "edit_file" in sequence and "search_text" in sequence
@@ -37,7 +47,7 @@ def test_demo_actually_uses_the_tools_it_claims(tmp_path):
 
 
 def test_evidence_file_carries_the_spec_fields(tmp_path):
-    run = rd.run_demo(rd.demo_by_id("bug-hunt"), engine="fake", work_root=tmp_path / ".work")
+    run = rd.run_demo(rd.demo_by_id("bug-hunt"), engine="fake", **_roots(tmp_path))
     path = rd.write_evidence(run, quiet=True)
     text = path.read_text(encoding="utf-8")
     for field in ("| task |", "| repo/baseline |", "| expected |", "| actual |", "| turns / tokens |",
@@ -50,8 +60,8 @@ def test_fixtures_stay_pristine_after_a_run(tmp_path):
     """跑完只留下工作副本；fixture 一旦被动过，第二次运行就不是同一个基线了。"""
     names = ("bug-hunt", "red-tests", "greenfield")
     before = {name: rd.tree_hash(rd.FIXTURES / name) for name in names}
-    rd.run_demo(rd.demo_by_id("red-tests"), engine="fake", work_root=tmp_path / ".work")
-    rd.run_demo(rd.demo_by_id("bug-hunt"), engine="fake", work_root=tmp_path / ".work")
+    rd.run_demo(rd.demo_by_id("red-tests"), engine="fake", **_roots(tmp_path))
+    rd.run_demo(rd.demo_by_id("bug-hunt"), engine="fake", **_roots(tmp_path))
     assert {name: rd.tree_hash(rd.FIXTURES / name) for name in names} == before
 
 
@@ -74,15 +84,38 @@ def test_red_tests_premise_holds():
 
 
 def test_readonly_demo_runs_in_readonly_mode(tmp_path):
-    run = rd.run_demo(rd.demo_by_id("readonly-qa"), engine="fake", work_root=tmp_path / ".work")
+    run = rd.run_demo(rd.demo_by_id("readonly-qa"), engine="fake", **_roots(tmp_path))
     assert run.mode == "readonly"
     assert run.result.state.denied_actions == 0, "READONLY 是靠模式挡住的，不是靠拒绝堆出来的"
     assert run.stats["tool_errors"] == 0
 
 
+def test_running_the_demo_tests_never_touches_the_committed_evidence(tmp_path):
+    """`demos/traces/*.fake.jsonl` 与 `demos/results/*.fake.md` 是仓库里的证据，不是缓存。
+
+    这两处以前每跑一次 pytest 就变一次脏：`run_demo()` 把落盘目录写死在仓库里，测试只
+    换了 `work_root`，于是被"更新"的是证据本身，而且里面的 `project_root`/`memory_root`
+    指向 `pytest-of-czx/…` 这样一次性的临时目录 —— 下一句"这条轨迹证明过 X"就查无实据。
+    覆盖顶层目录是命令行跑 demo 应有的语义，跑测试不该带上它。
+    """
+    watched = sorted(rd.TRACES.glob("*.fake.jsonl")) + sorted(rd.RESULTS.glob("*.fake.md"))
+    assert watched, "仓库里一个 fake 证据都没有，这条测试就成了空的"
+    before = {path: path.read_bytes() for path in watched}
+    rd.run_demo(
+        rd.demo_by_id("bug-hunt"),
+        engine="fake",
+        work_root=tmp_path / ".work",
+        artifact_root=tmp_path / "artifacts",
+    )
+    assert {path: path.read_bytes() for path in watched} == before, "跑测试改写了仓库里的证据"
+    produced = list((tmp_path / "artifacts" / "traces").glob("*.jsonl"))
+    assert len(produced) == 1, "轨迹没落到临时目录，artifact_root 没接线"
+    assert rd.demo_by_id("bug-hunt").id in produced[0].name
+
+
 def test_unsupported_live_engine_is_refused(tmp_path):
     with pytest.raises(ValueError, match="不支持"):
-        rd.run_demo(rd.demo_by_id("giveup"), engine="live", work_root=tmp_path / ".work")
+        rd.run_demo(rd.demo_by_id("giveup"), engine="live", **_roots(tmp_path))
 
 
 def test_demo_table_covers_every_acceptance_line():

@@ -1,0 +1,133 @@
+{
+  "conclusion": "同一个预算的多个样本给出相反结论，所以这条判据在这个题上量的不是压缩阶梯。",
+  "context_budget": 24000,
+  "engine": "live",
+  "l1_trigger_line": 16800,
+  "l3_refuse_line": 22800,
+  "not_proved": "不证明'预算调大就会通过'，也不证明反向。它只钉住一件事：把预算当旋钮去凑一个≥60%，凑出来的那个数解释的是模型这一趟怎么走，不是压缩救没救回来。",
+  "question": "把 `CONTEXT` 预算拧到 L1 触发线之上（0.70 × 预算 > 压缩前的自然峰值），阶梯还动不动手、任务还跑不跑得完 —— 也就是「压缩后成功率 ≥60%」在真端点上到底量的是什么。",
+  "reading": [
+    "样本 1：1/1 通过 · 10 轮 · 压缩 0 次（{}）· 峰值 est 11,629 · 终止 {'completed': 1} · 76,364 tokens",
+    "样本 2：0/1 通过 · 18 轮 · 压缩 6 次（{'elide': 5, 'summarize': 1}）· 峰值 est 19,291 · 终止 {'max_turns': 1} · 182,613 tokens"
+  ],
+  "samples": [
+    {
+      "abandoned_by_pairing": 0,
+      "argv": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+        "--only",
+        "gf-calculator",
+        "--engine",
+        "live",
+        "--repeats",
+        "1",
+        "--context-budget",
+        "24000",
+        "--out",
+        "eval\\.work\\tmp-live-probe"
+      ],
+      "as_of": "2026-09-23 01:14:29",
+      "compaction_levels": {},
+      "compactions": 0,
+      "context_budget": 24000,
+      "endpoint_errors": 0,
+      "exit_code": null,
+      "l1_trigger_line": 16800,
+      "l3_refuse_line": 22800,
+      "pairing_400_errors": 0,
+      "pass_at_k": "1/1",
+      "per_run": [
+        {
+          "compactions": 0,
+          "peak_est_before_the_fatal_jump": 11629,
+          "refused_at": [],
+          "trace": "gf-calculator.r0.live.jsonl",
+          "turns": 10,
+          "verdict": "pass"
+        }
+      ],
+      "produced_by": "只量现成批次（不花额度）：eval\\.work\\tmp-live-probe",
+      "refusal_ests": [],
+      "repeats": 1,
+      "requests_sent": 10,
+      "runs_with_ladder_engaged": 0,
+      "success_rate": 1.0,
+      "termination_counts": {
+        "completed": 1
+      },
+      "tokens_spent": 76364,
+      "traces_copied_to": [
+        "eval/results/b2-live-budget-probe.traces/sample01/gf-calculator.r0.live.jsonl"
+      ],
+      "via_command": [
+        "scripts/b2_compact_ab.py",
+        "--probe-from",
+        "eval/.work/tmp-live-probe"
+      ]
+    },
+    {
+      "abandoned_by_pairing": 0,
+      "argv": [
+        "--tasks",
+        "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+        "--only",
+        "gf-calculator",
+        "--engine",
+        "live",
+        "--repeats",
+        "1",
+        "--context-budget",
+        "24000",
+        "--out",
+        "eval\\.work\\b2-ab\\live-probe"
+      ],
+      "as_of": "2026-09-23 01:14:37",
+      "compaction_levels": {
+        "elide": 5,
+        "summarize": 1
+      },
+      "compactions": 6,
+      "context_budget": 24000,
+      "endpoint_errors": 0,
+      "exit_code": null,
+      "l1_trigger_line": 16800,
+      "l3_refuse_line": 22800,
+      "pairing_400_errors": 0,
+      "pass_at_k": "0/1",
+      "per_run": [
+        {
+          "compactions": 6,
+          "peak_est_before_the_fatal_jump": 19291,
+          "refused_at": [],
+          "trace": "gf-calculator.r0.live.jsonl",
+          "turns": 18,
+          "verdict": "fail"
+        }
+      ],
+      "produced_by": "只量现成批次（不花额度）：eval\\.work\\b2-ab\\live-probe",
+      "refusal_ests": [],
+      "repeats": 1,
+      "requests_sent": 18,
+      "runs_with_ladder_engaged": 1,
+      "success_rate": 0.0,
+      "termination_counts": {
+        "max_turns": 1
+      },
+      "tokens_spent": 182613,
+      "traces_copied_to": [
+        "eval/results/b2-live-budget-probe.traces/sample02/gf-calculator.r0.live.jsonl"
+      ],
+      "via_command": [
+        "scripts/b2_compact_ab.py",
+        "--probe-from",
+        "eval/.work/b2-ab/live-probe"
+      ]
+    }
+  ],
+  "samples_disagree": true,
+  "schema": 2,
+  "spec": "SPEC v2 §3.3.2 · B2 live 臂未量判据（success_rate_unmeasurable）的高预算区间实测",
+  "task": "gf-calculator",
+  "why_this_exists": "低区间的数字（预算 6,000、5 条 run 全部被一条工具结果顶过 L3 线）写在 `eval/results/b2-compact-ab.json` 的 `live` 里；高区间当时只是从触发线推出来的。这一档把它变成实测，并且**每趟都留底**。"
+}

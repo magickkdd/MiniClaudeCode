@@ -241,6 +241,37 @@ def test_a_half_written_manifest_line_is_skipped_not_fatal(repo: Path, tmp_path:
     (out / "manifest.jsonl").write_text('{"task_id": "toy-fix", "rep\n', encoding="utf-8")
     report = runner_for(repo, out, repeats=1).run()
     assert verdicts_of(report) == {"toy-fix": "pass"}, "坏行不能污染这一批的判定"
+    assert 'toy-fix", "rep' in (out / "manifest.jsonl").read_text(encoding="utf-8"), "坏行是证据，不能静默抹掉"
+
+
+def test_rerunning_a_run_supersedes_its_manifest_row(repo: Path, tmp_path: Path) -> None:
+    """重跑覆盖同名 trace，所以 manifest 里**两行指向一份轨迹**就是错的。
+
+    这不是假想的坑：§3.9 导出器在既有批次上抓到 26 例（14 duplicate-trace +
+    12 turn-mismatch），后果是把一条轨迹数成两条，还给旧那行配上不存在的观察。
+    """
+    write_task(repo, task_json())
+    manifest = tmp_path / "out" / "manifest.jsonl"
+    manifest.parent.mkdir(parents=True)
+    runner = runner_for(repo, tmp_path / "out", repeats=1)
+
+    runner.append_manifest(
+        RunRecord(task_id="toy-fix", repeat=0, engine="fake", verdict="fail", trace_path=None,
+                  metrics={"turns": 9}, taskset_sha=runner.tasks.sha)
+    )
+    runner.append_manifest(
+        RunRecord(task_id="toy-fix", repeat=0, engine="fake", verdict="pass", trace_path=None,
+                  metrics={"turns": 3}, taskset_sha=runner.tasks.sha)
+    )
+    rows = [json.loads(line) for line in manifest.read_text(encoding="utf-8").splitlines()]
+    assert [(row["task_id"], row["repeat"]) for row in rows] == [("toy-fix", 0)], "同名键只留最新一行"
+    assert rows[0]["verdict"] == "pass" and rows[0]["metrics"]["turns"] == 3
+    assert not list(manifest.parent.glob("*.tmp")), "原子写的临时文件不能留下"
+
+    # 取代之后续跑才认得这份现场：旧行若不删，resume 会以为 9 轮那次失败还在账上。
+    report = runner_for(repo, tmp_path / "out", repeats=1).run()
+    assert report.summary["resumed"] == 1
+    assert verdicts_of(report) == {"toy-fix": "pass"}
 
 
 # ---------------------------------------------------------------- 预算与失败关闭

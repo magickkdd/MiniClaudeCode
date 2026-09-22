@@ -73,6 +73,15 @@ TRACES = DEMO_DIR / "traces"
 RESULTS = DEMO_DIR / "results"
 MAX_DIFF_LINES = 160
 
+
+def _display(path: Path) -> str:
+    """证据表格里写路径：在仓库里就写相对路径，在临时目录里就照实写绝对路径。
+
+    原来那两行是把 `demos/traces/` 当字面量拼出来的，于是测试跑到 tmp 里时，证据文件
+    会指着一个并不存在的仓库路径 —— 表格里的路径必须和这次运行真的写出来的那个是同一个。
+    """
+    return path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else path.as_posix()
+
 # --------------------------------------------------------------- 探测脚本（任务承诺的行为）
 
 CODEGEN_PROBE = '''
@@ -340,6 +349,11 @@ class Run:
     # 报告里那个 baseline 哈希要和判定用同一个排除口径：表里的数与判定的数来自两套
     # 树视图时，"可溯源"就只剩一个字面意思了。
     memory_dir: str
+    # 轨迹与证据文件落在哪儿。默认就是仓库里那两份目录（命令行跑 demo 时该覆盖它们），
+    # 但 pytest 传 tmp 目录进来：跑一次测试套件不该把仓库里的**证据**改成临时工作副本的
+    # 样子 —— 那会让 `git status` 每次跑完都脏，而且脏进去的 memory_root/project_root
+    # 指向 `pytest-of-czx/...`，下一句"这条轨迹证明过 X"就查无实据了。
+    artifact_root: Path = DEMO_DIR
 
     @property
     def tokens(self) -> int:
@@ -369,17 +383,23 @@ def run_demo(
     *,
     engine: str = "fake",
     work_root: Path = WORK,
+    artifact_root: Path = DEMO_DIR,
     verbose: bool = False,
     config: Config | None = None,
 ) -> Run:
-    """跑一个 demo。`engine=fake` 用脚本，`engine=live` 打真端点。"""
+    """跑一个 demo。`engine=fake` 用脚本，`engine=live` 打真端点。
+
+    `artifact_root` 决定轨迹与证据文件落在哪个 `<root>/traces` 与 `<root>/results` 下。
+    命令行不传它，就是仓库里那两份目录（覆盖是应有语义）；测试必须传 tmp 目录。
+    """
     if engine == "live" and not demo.supports_live:
         raise ValueError(f"{demo.id} 不支持 --engine live（{demo.note}）")
 
     workdir, baseline = prepare(demo, work_root=work_root)
-    TRACES.mkdir(parents=True, exist_ok=True)
-    RESULTS.mkdir(parents=True, exist_ok=True)
-    trace = TRACES / f"{demo.id}.{engine}.jsonl"
+    traces_dir = artifact_root / "traces"
+    (artifact_root / "results").mkdir(parents=True, exist_ok=True)
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    trace = traces_dir / f"{demo.id}.{engine}.jsonl"
     trace.unlink(missing_ok=True)
 
     lines: list[str] = []
@@ -435,6 +455,7 @@ def run_demo(
         baseline=baseline,
         trace=trace,
         memory_dir=cfg.memory_dir,
+        artifact_root=artifact_root,
     )
 
 
@@ -496,8 +517,8 @@ def evidence_markdown(run: Run) -> str:
         f"| 上下文峰值 | {stats.get('context_peak_tokens', 0):,} tokens |",
         f"| 权限模式 | `{run.mode}`（工作副本在临时目录里，AUTO 不等于对用户仓库放开） |",
         f"| wall time | {run.elapsed:.1f}s |",
-        f"| trace | `demos/traces/{run.trace.name}` |",
-        f"| 工作副本 | `demos/.work/{run.workdir.name}`（判定就在这个目录跑） |",
+        f"| trace | `{_display(run.trace)}` |",
+        f"| 工作副本 | `{_display(run.workdir)}`（判定就在这个目录跑） |",
         "",
     ]
     if demo.note:
@@ -550,7 +571,7 @@ def _verdict_line(run: Run) -> str:
 
 
 def write_evidence(run: Run, *, quiet: bool = False) -> Path:
-    path = RESULTS / f"{run.demo.id}.{run.engine}.md"
+    path = run.artifact_root / "results" / f"{run.demo.id}.{run.engine}.md"
     path.write_text(evidence_markdown(run), encoding="utf-8")
     if not quiet:
         print(f"证据 → {path.relative_to(ROOT) if path.is_relative_to(ROOT) else path}")

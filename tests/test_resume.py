@@ -45,6 +45,15 @@ def crash_scene(agent: Agent, *, done: list[str], keep: int = 2) -> Any:
     return replace(snapshot, messages=snapshot.messages[:keep], done_call_ids=done, termination="")
 
 
+def one_write_call(path: str) -> Any:
+    """单调用那一轮：id 一定是 `call_0`（`scripted_tool_calls` 按下标命名）。
+
+    故意的 —— "每轮都发同一个 id"正是 FakeLLM 与真实端点的差别所在，也是上面那条
+    误判唯一能被触发的形状。
+    """
+    return scripted_tool_calls([("write_file", {"path": path, "content": "A = 1\n"})])
+
+
 def two_write_calls() -> Any:
     return scripted_tool_calls(
         [("write_file", {"path": "a.py", "content": "A = 1\n"}), ("write_file", {"path": "b.py", "content": "B = 2\n"})]
@@ -58,6 +67,29 @@ def rooted(tmp_path: Path) -> Path:
 
 
 # --------------------------------------------------------------- at-most-once
+
+
+def test_the_ledger_of_this_process_is_not_a_replay_guard(rooted: Path) -> None:
+    """`done_call_ids` 里有这个 id，**不代表**上一个进程做过它。
+
+    真实的踩坑现场（B2 的 on 臂，`eval/.work/b2-ab/on` —— 那份 trace 已被修复后的重跑覆盖，
+    同名 trace 只留最后一次，所以**这条测试就是它的可复现形式**）：`scripted_tool_calls` 每轮都发
+    `call_0`，`dedupe_tool_use_ids` 只按**当前历史**改名，而 L2 摘要会把带旧名的那条助手消息
+    整组删掉 —— 历史里看不见冲突了，于是第 13 轮又发出来一个干净的 `call_0`。判据如果读
+    `done_call_ids`（本进程每执行一次就往里加一个），这条全新的写入就被认成"上一个进程做过"、
+    直接跳过：当时那一批 19 轮里跳了 6 次，八份汇总只写出四份，判据判 fail，而 trace 看着一切正常。
+
+    所以这里直接摆出那个状态：账本里有 `call_0`，历史里没有。它必须**执行**。
+    """
+    agent = make_agent(rooted, [one_write_call("a.py"), scripted_final_text("写完了。")], session_id="recycled")
+    agent.done_call_ids.add("call_0")  # ← 本进程自己记的账，不是从现场恢复来的
+    agent.run("写一个文件")
+
+    assert (rooted / "a.py").is_file(), "全新的一次写入被误判成重放，副作用没发生"
+    records = list(replay(next(Path(rooted).rglob(".traces/*.jsonl"))))
+    kinds = [record["kind"] for record in records]
+    assert "session_replay" not in kinds, "没有恢复过现场，就不该有任何一条重放记录"
+    assert kinds.count("tool_call") == 1
 
 
 def test_a_done_call_is_never_re_executed(rooted: Path) -> None:

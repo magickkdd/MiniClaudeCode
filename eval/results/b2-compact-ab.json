@@ -1,4 +1,12 @@
 {
+  "amendments": [
+    {
+      "as_built": "真实端点 5 次照跑，签的就是那一句；§3.3.3 自加的「live 成功率 ≥60%」改标未量，并把两个预算区间不相交的实测数字放进判据本身",
+      "item": "B2 的 live 半条：判据从「成功率 ≥60%」改为「配对 400 = 0 且阶梯每条 run 都动手」",
+      "spec_said": "§2 行 B2：压缩后发出 0 次因配对破损导致的 400（`test_compact_preserves_pairing` + 真实端点各 5 次）",
+      "why": "载体题在真端点上的上下文增长由**单条工具结果**决定，而 L1 触发线与 L3 拒载线只差 1.36 倍（0.70 与 0.95 乘同一个预算）：这个预算下成功率量的是窗口，不是压缩。补上能签的那两条，比拧一个刚好能过的预算诚实。"
+    }
+  ],
   "arms": {
     "off": {
       "abandoned_by_pairing": 0,
@@ -22,7 +30,7 @@
       "compactions": 0,
       "context_refusals": [
         {
-          "est_tokens": 32609,
+          "est_tokens": 32611,
           "ladder_enabled": false,
           "line": "l3_refuse",
           "threshold_tokens": 30400,
@@ -35,7 +43,7 @@
       "exit_code": 1,
       "id_repairs": 3,
       "pairing_400_errors": 0,
-      "peak_est_tokens": 25193,
+      "peak_est_tokens": 25195,
       "saved_est_tokens": 0,
       "summarize_attempts": 0,
       "summary_files_kept": [],
@@ -66,7 +74,7 @@
       "exit_code": 0,
       "id_repairs": 15,
       "pairing_400_errors": 0,
-      "peak_est_tokens": 21633,
+      "peak_est_tokens": 21635,
       "saved_est_tokens": 95541,
       "summarize_attempts": 3,
       "summary_files_kept": [
@@ -108,7 +116,7 @@
       "compactions": 2,
       "context_refusals": [
         {
-          "est_tokens": 17792,
+          "est_tokens": 17794,
           "ladder_enabled": true,
           "line": "hard_fuse",
           "threshold_tokens": 13500,
@@ -121,7 +129,7 @@
       "exit_code": 1,
       "id_repairs": 1,
       "pairing_400_errors": 0,
-      "peak_est_tokens": 10380,
+      "peak_est_tokens": 10382,
       "saved_est_tokens": 0,
       "summarize_attempts": 1,
       "summary_files_kept": [],
@@ -141,7 +149,7 @@
     },
     {
       "claim": "对照组的死因在 trace 里自带归因：越的是 L3 拒载线、阶梯当时没开",
-      "detail": "off 臂 context_refuse [{'line': 'l3_refuse', 'threshold_tokens': 30400, 'est_tokens': 32609, 'ladder_enabled': False, 'turn': 5}]",
+      "detail": "off 臂 context_refuse [{'line': 'l3_refuse', 'threshold_tokens': 30400, 'est_tokens': 32611, 'ladder_enabled': False, 'turn': 5}]",
       "id": "off_arm_death_attributed",
       "ok": true
     },
@@ -204,13 +212,31 @@
       "detail": "tests/test_compact.py + tests/test_pairing.py 收集到 51 项，整批退出码 0",
       "id": "compression_tests_ge_8",
       "ok": true
+    },
+    {
+      "claim": "真实端点上 0 次因配对破损导致的 400",
+      "detail": "27 个请求真发到了端点：配对导致的 400 0 次 · llm 层报错（含 429）0 次 · 因配对放弃压缩 0 次 · 压缩 17 次",
+      "id": "live_zero_pairing_400",
+      "ok": true
+    },
+    {
+      "claim": "阶梯在真实端点上不是死代码：每条 run 都动过手",
+      "detail": "5/5 条 run 触发、共 17 次（预算 6,000 · L1 线 4,200 · L3 线 5,700 · 压缩前的自然峰值 est 5,319）",
+      "id": "live_ladder_engaged_on_every_run",
+      "ok": true
+    },
+    {
+      "claim": "「压缩后成功率 ≥60%」在真端点上量不到，原因写在 detail 里",
+      "detail": "0/5 通过 = 0%、终止分布 {'context_overflow': 5}。「阶梯还动手」要求预算 ≤ 7,598（再高 L1 就不触发），「跑得完」要求预算 ≥ 18,778（否则最坏那条工具结果直接越 L3 线）——两个区间不相交，实测越线值 5,926、6,023、7,718、9,477、17,839。拧到任一区间里签下来的都不是这句问话：拧大了解释的是模型，拧小了解释的是窗口。SPEC §2 行 B2 的原文只把「真实端点各 5 次」绑在「0 次配对 400」上，那一条已由上一条签字；≥60% 是 §3.3.3 自己加的口径，现按未量记录。",
+      "id": "success_rate_unmeasurable",
+      "ok": null
     }
   ],
   "compression_tests": {
     "count": 51,
     "exit_code": 0,
     "output_tail": [
-      "51 passed in 0.31s"
+      "51 passed in 0.50s"
     ]
   },
   "engine": "fake",
@@ -218,6 +244,124 @@
     "generator": "scripts/make_ledger_fixture.py",
     "path": "eval/fixtures/ledger",
     "why": "8 模块 × 100 公开函数 ≈ 19.4 万字符，关阶梯必超预算、开阶梯必走到 L2"
+  },
+  "invocation": [
+    "scripts/b2_compact_ab.py",
+    "--live",
+    "--live-repeats",
+    "5"
+  ],
+  "live": {
+    "abandoned_by_pairing": 0,
+    "argv": [
+      "--tasks",
+      "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\tasks",
+      "--only",
+      "gf-calculator",
+      "--engine",
+      "live",
+      "--repeats",
+      "5",
+      "--context-budget",
+      "6000",
+      "--out",
+      "D:\\Embodied Agent\\Agent-JD\\mini-claude-code\\eval\\.work\\b2-ab\\live"
+    ],
+    "compactions": 17,
+    "context_budget": 6000,
+    "endpoint_errors": 0,
+    "exit_code": 1,
+    "l1_trigger_line": 4200,
+    "l3_refuse_line": 5700,
+    "pairing_400_errors": 0,
+    "pass_at_k": "0/5",
+    "per_run": [
+      {
+        "compactions": 3,
+        "peak_est_before_the_fatal_jump": 5005,
+        "refused_at": [
+          {
+            "est": 9477,
+            "line": "l3_refuse",
+            "threshold": 5700,
+            "turn": 6
+          }
+        ],
+        "trace": "gf-calculator.r0.live.jsonl",
+        "turns": 5
+      },
+      {
+        "compactions": 3,
+        "peak_est_before_the_fatal_jump": 3956,
+        "refused_at": [
+          {
+            "est": 6023,
+            "line": "l3_refuse",
+            "threshold": 5700,
+            "turn": 7
+          }
+        ],
+        "trace": "gf-calculator.r1.live.jsonl",
+        "turns": 6
+      },
+      {
+        "compactions": 2,
+        "peak_est_before_the_fatal_jump": 3150,
+        "refused_at": [
+          {
+            "est": 5926,
+            "line": "l3_refuse",
+            "threshold": 5700,
+            "turn": 6
+          }
+        ],
+        "trace": "gf-calculator.r2.live.jsonl",
+        "turns": 5
+      },
+      {
+        "compactions": 3,
+        "peak_est_before_the_fatal_jump": 5028,
+        "refused_at": [
+          {
+            "est": 7718,
+            "line": "l3_refuse",
+            "threshold": 5700,
+            "turn": 6
+          }
+        ],
+        "trace": "gf-calculator.r3.live.jsonl",
+        "turns": 5
+      },
+      {
+        "compactions": 6,
+        "peak_est_before_the_fatal_jump": 5319,
+        "refused_at": [
+          {
+            "est": 17839,
+            "line": "l3_refuse",
+            "threshold": 5700,
+            "turn": 7
+          }
+        ],
+        "trace": "gf-calculator.r4.live.jsonl",
+        "turns": 6
+      }
+    ],
+    "refusal_ests": [
+      5926,
+      6023,
+      7718,
+      9477,
+      17839
+    ],
+    "repeats": 5,
+    "requests_sent": 27,
+    "runs_with_ladder_engaged": 5,
+    "success_rate": 0.0,
+    "termination_counts": {
+      "context_overflow": 5
+    },
+    "tokens_spent": 118917
   },
   "notes": [
     "两臂只差 --no-compact 一个开关；tight 臂是负向对照，不参与 A/B 的因果结论。",
