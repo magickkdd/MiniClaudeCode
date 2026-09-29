@@ -189,15 +189,15 @@ ladder 的第 2、3 级（`--max-model-len 2048`、`--swap-space 0`）**最终�
 
 | 引擎 | 科目 | 退出码 | 判据 | 失败形态（服务端/上游原话） |
 |---|---|---|---|---|
-| llamacpp | mcc-calc | 0 | ✓（另有 1 次结局相反）退出码==0（MCC①） | `退出码 0 但零文件产出，tool_calls_executed=0（模型只叙述不动手，退出码判据挡不住）` |
-| llamacpp | mcc-readonly | 1 | ✗ 退出 0 + 工作区摘要不变 + 答案含 ValueError（MCC②） | `{"error":{"code":400,"message":"request (5296 tokens) exceeds the available context size (4096 tokens), try increasing it` |
-| llamacpp | insight-research | 1 | ✗（另有 2 次结局相反）退出 0 + JSON 含 `topic/report/brief/verification/latency_s` | `ImportError: cannot import name 'main' from 'insight_agent'`（上游入口坏，见本节末） |
-| ollama | mcc-calc | 0 | ✓ 退出码==0（MCC①） | — |
-| ollama | mcc-readonly | 1 | ✗ 同上 | `{"error":{"message":"{\"error\":{\"code\":400,\"message\":\"request (5278 tokens) exceeds the available context` |
-| ollama | insight-research | 1 | ✗ 同上 | 同上 ImportError（真因是 writer 节点 400） |
-| vllm | mcc-calc | 1 | ✗ 退出码==0（MCC①） | `termination=llm_failure · tool_errors=0 · 产出 0 个文件` |
-| vllm | mcc-readonly | 1 | ✗ 同上 | `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set` |
-| vllm | insight-research | 1 | ✗ 同上 | `Error code: 400 - This model's maximum context length is 4096 tokens` |
+| llamacpp | mcc-calc | 0 | ✓（另有 1 次结局相反） 退出码==0（spec §5 MCC①） | `退出码 0 但零文件产出，tool_calls_executed=0（模型只叙述不动手，退出码判据挡不住）` |
+| llamacpp | mcc-readonly | 1 | ✗ 退出 0 + 工作区摘要不变 + 答案含 ValueError（spec §5 MCC②） | `{"error":{"code":400,"message":"request (5296 tokens) exceeds the available context size (4096 tokens), try increasing i` |
+| llamacpp | insight-research | 1 | ✗（另有 2 次结局相反） 退出 0 + JSON 含 ['topic', 'report', 'brief', 'verification', ' | `ImportError: cannot import name 'main' from 'insight_agent' (D:\insight-agent-full\src\insight_agent\__init__.py)` |
+| ollama | mcc-calc | 0 | ✓ 退出码==0（spec §5 MCC①） | `—` |
+| ollama | mcc-readonly | 1 | ✗ 退出 0 + 工作区摘要不变 + 答案含 ValueError（spec §5 MCC②） | `{"error":{"message":"{\"error\":{\"code\":400,\"message\":\"request (5278 tokens) exceeds the available context size (40` |
+| ollama | insight-research | 1 | ✗ 退出 0 + JSON 含 ['topic', 'report', 'brief', 'verification', ' | `ImportError: cannot import name 'main' from 'insight_agent' (D:\insight-agent-full\src\insight_agent\__init__.py)` |
+| vllm | mcc-calc | 1 | ✗ 退出码==0（spec §5 MCC①） | `termination=llm_failure · tool_errors=0 · 产出 0 个文件` |
+| vllm | mcc-readonly | 1 | ✗ 退出 0 + 工作区摘要不变 + 答案含 ValueError（spec §5 MCC②） | `{"error":{"message":"\"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set","type":"B` |
+| vllm | insight-research | 1 | ✗ 退出 0 + JSON 含 ['topic', 'report', 'brief', 'verification', ' | `ImportError: cannot import name 'main' from 'insight_agent' (D:\insight-agent-full\src\insight_agent\__init__.py)` |
 
 ### 6.1 逐格的真实成因
 
