@@ -1,0 +1,4 @@
+本次用 local 后端 · /backend 看详情
+✗ 端点拒绝请求 HTTP 400: {"error":{"message":"\"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set","type":"BadRequestError","param":null,"code":400}}
+模型调用失败：端点拒绝请求 HTTP 400: {"error":{"message":"\"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set","type":"BadRequestError","param":null,"code":400}}
+用量：1 轮 · 输入 0 + 输出 0 = 0 tokens

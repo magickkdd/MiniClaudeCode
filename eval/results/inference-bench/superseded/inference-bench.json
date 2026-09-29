@@ -1,0 +1,141 @@
+{
+  "schema": 1,
+  "protocol": {
+    "prompts_sha256": "4fee4dbb36d7231c95761b76b27fd70a8d394d4a0ad5781b8c4fd83a72fb8648",
+    "prompt_ids": [
+      "short-01",
+      "short-02",
+      "short-03",
+      "short-04",
+      "short-05",
+      "short-06",
+      "long-01",
+      "long-02",
+      "long-03",
+      "long-04",
+      "long-05",
+      "long-06"
+    ],
+    "prompt_count": 12,
+    "tokenizer_sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+    "max_tokens": 256,
+    "temperature": 0.0,
+    "repeats": {
+      "ollama": 10,
+      "llamacpp": 10,
+      "vllm": 10,
+      "llamacpp-7b": 2
+    },
+    "concs": {
+      "ollama": [
+        1,
+        4
+      ],
+      "llamacpp": [
+        1,
+        4
+      ],
+      "vllm": [
+        1,
+        4
+      ],
+      "llamacpp-7b": [
+        1
+      ]
+    },
+    "commands": {
+      "ollama": "ollama pull qwen2.5:1.5b-instruct-q4_K_M（服务随 Ollama 桌面端自启，默认 11434）",
+      "llamacpp": "D:\\inference-bench\\llama.cpp\\llama-server.exe -m D:\\inference-bench\\models\\qwen2.5-1.5b-instruct-q4_k_m.gguf -c 4096 -ngl 999 --port 8080",
+      "vllm": "wsl -d Ubuntu -e bash -lc 'source ~/vllm-env/bin/activate && vllm serve D:\\inference-bench/models/AWQ --max-model-len 4096 --gpu-memory-utilization 0.85 --enforce-eager'",
+      "llamacpp-7b": "D:\\inference-bench\\llama.cpp\\llama-server.exe -m D:\\inference-bench\\models\\qwen2.5-7b-instruct-q4_k_m-merged.gguf -c 4096 -ngl 20 --port 8080"
+    },
+    "endpoints": {
+      "ollama": "http://localhost:11434/v1",
+      "llamacpp": "http://localhost:8080/v1",
+      "vllm": "http://localhost:8000/v1",
+      "llamacpp-7b": "http://localhost:8080/v1"
+    },
+    "models_requested": {
+      "ollama": "qwen2.5:1.5b-instruct-q4_K_M",
+      "llamacpp": "qwen2.5-1.5b-instruct-q4_k_m",
+      "vllm": "Qwen/Qwen2.5-1.5B-Instruct-AWQ",
+      "llamacpp-7b": "qwen2.5-7b-instruct-q4_k_m"
+    },
+    "client_metric": "completion tokens = Qwen tokenizer over the fully concatenated text"
+  },
+  "groups": {
+    "llamacpp:c1": {
+      "engine": "llamacpp",
+      "tier": "main",
+      "model_served": "D:/inference-bench/models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "conc": 1,
+      "prompts": 12,
+      "repeats": 10,
+      "attempts": 120,
+      "successes": 120,
+      "ttft_p50_ms": 2088.8,
+      "ttft_p95_ms": 2314.1,
+      "tps_p50": 89.2,
+      "tps_p95": 95.5,
+      "tps_mean": 86.36,
+      "wall_tps": 43.93,
+      "completion_tokens_total": 22351,
+      "wall_s": 508.8,
+      "usage_dev_median": 0.0044,
+      "usage_dev_flagged": 60,
+      "prompt_dev_median": 0.2232,
+      "template_overhead_median": 29.0,
+      "usage_support": [
+        "include_usage"
+      ],
+      "finish_reasons": {
+        "length": 58,
+        "stop": 62
+      },
+      "errors": {},
+      "raw": "eval/results/inference-bench/llamacpp.c1.jsonl"
+    },
+    "llamacpp:c4": {
+      "engine": "llamacpp",
+      "tier": "main",
+      "model_served": "D:/inference-bench/models/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "conc": 4,
+      "prompts": 12,
+      "repeats": 10,
+      "attempts": 120,
+      "successes": 60,
+      "ttft_p50_ms": 2341.0,
+      "ttft_p95_ms": 3148.2,
+      "tps_p50": 58.5,
+      "tps_p95": 74.1,
+      "tps_mean": 58.86,
+      "wall_tps": 61.31,
+      "completion_tokens_total": 7242,
+      "wall_s": 118.1,
+      "usage_dev_median": 0.0103,
+      "usage_dev_flagged": 60,
+      "prompt_dev_median": 0.4603,
+      "template_overhead_median": 29.0,
+      "usage_support": [
+        "include_usage",
+        "no-usage-in-stream"
+      ],
+      "finish_reasons": {
+        "length": 3,
+        "stop": 57
+      },
+      "errors": {
+        "in-stream error: {\"code\": 500, \"message\": \"Context size has been exceeded.\", \"ty": 60
+      },
+      "server_errors": {
+        "{\"code\": 500, \"message\": \"Context size has been exceeded.\", \"type\": \"server_error\"}": 60
+      },
+      "raw": "eval/results/inference-bench/llamacpp.c4.jsonl"
+    }
+  },
+  "raw": {
+    "llamacpp:c1": "eval/results/inference-bench/llamacpp.c1.jsonl",
+    "llamacpp:c4": "eval/results/inference-bench/llamacpp.c4.jsonl"
+  },
+  "generated_at": "2026-09-30T01:04:55"
+}

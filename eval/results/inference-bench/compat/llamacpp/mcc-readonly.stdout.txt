@@ -1,0 +1,4 @@
+本次用 local 后端 · /backend 看详情
+✗ 端点拒绝请求 HTTP 400: {"error":{"code":400,"message":"request (5296 tokens) exceeds the available context size (4096 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":5296,"n_ctx":4096}}
+模型调用失败：端点拒绝请求 HTTP 400: {"error":{"code":400,"message":"request (5296 tokens) exceeds the available context size (4096 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":5296,"n_ctx":4096}}
+用量：1 轮 · 输入 0 + 输出 0 = 0 tokens

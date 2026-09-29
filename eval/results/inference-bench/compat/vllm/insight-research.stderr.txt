@@ -1,0 +1,102 @@
+                                │
+│                                                                             │
+│   444 │   │   │   else:                                                     │
+│   445 │   │   │   │   run_manager.on_chain_end(ret)                         │
+│   446 │   │   else:                                                         │
+│ > 447 │   │   │   ret = self.func(*args, **kwargs)                          │
+│   448 │   │   if self.recurse and isinstance(ret, Runnable):                │
+│   449 │   │   │   return ret.invoke(input, config)                          │
+│   450 │   │   return ret                                                    │
+│                                                                             │
+│ D:\insight-agent-full\src\insight_agent\graph\nodes.py:381 in writer        │
+│                                                                             │
+│   378 │   │   evidence = (                                                  │
+│   379 │   │   │   f"{existing}\n\n## 本轮新证据\n\n{fresh}" if existing     │
+│       else fresh                                                            │
+│   380 │   │   )                                                             │
+│ > 381 │   │   result = llm.invoke(                                          │
+│   382 │   │   │   [                                                         │
+│   383 │   │   │   │   ("system", WRITER_SYSTEM),                            │
+│   384 │   │   │   │   (                                                     │
+│                                                                             │
+│ D:\insight-agent-full\.venv\Lib\site-packages\langchain_core\language_model │
+│ s\chat_models.py:488 in invoke                                              │
+│                                                                             │
+│    485 │   │   │   "AIMessage",                                             │
+│    486 │   │   │   cast(                                                    │
+│    487 │   │   │   │   "ChatGeneration",                                    │
+│ >  488 │   │   │   │   self.generate_prompt(                                │
+│    489 │   │   │   │   │   [self._convert_input(input)],                    │
+│    490 │   │   │   │   │   stop=stop,                                       │
+│    491 │   │   │   │   │   callbacks=config.get("callbacks"),               │
+│                                                                             │
+│ D:\insight-agent-full\.venv\Lib\site-packages\langchain_core\language_model │
+│ s\chat_models.py:1877 in generate_prompt                                    │
+│                                                                             │
+│   1874 │   │   **kwargs: Any,                                               │
+│   1875 │   ) -> LLMResult:                                                  │
+│   1876 │   │   prompt_messages = [p.to_messages() for p in prompts]         │
+│ > 1877 │   │   return self.generate(prompt_messages, stop=stop,             │
+│        callbacks=callbacks, **kwargs)                                       │
+│   1878 │                                                                    │
+│   1879 │   @override                                                        │
+│   1880 │   async def agenerate_prompt(                                      │
+│                                                                             │
+│ D:\insight-agent-full\.venv\Lib\site-packages\langchain_core\language_model │
+│ s\chat_models.py:1684 in generate                                           │
+│                                                                             │
+│   1681 │   │   for i, m in enumerate(input_messages):                       │
+│   1682 │   │   │   try:                                                     │
+│   1683 │   │   │   │   results.append(                                      │
+│ > 1684 │   │   │   │   │   self._generate_with_cache(                       │
+│   1685 │   │   │   │   │   │   m,                                           │
+│   1686 │   │   │   │   │   │   stop=stop,                                   │
+│   1687 │   │   │   │   │   │   run_manager=run_managers[i] if run_managers  │
+│        else None,                                                           │
+│                                                                             │
+│ D:\insight-agent-full\.venv\Lib\site-packages\langchain_core\language_model │
+│ s\chat_models.py:2022 in _generate_with_cache                               │
+│                                                                             │
+│   2019 │   │   │   │   chunks.append(chunk)                                 │
+│   2020 │   │   │   result = generate_from_stream(iter(chunks))              │
+│   2021 │   │   elif                                                         │
+│        inspect.signature(self._generate).parameters.get("run_manager"):     │
+│ > 2022 │   │   │   result = self._generate(                                 │
+│   2023 │   │   │   │   messages, stop=stop, run_manager=run_manager,        │
+│        **kwargs                                                             │
+│   2024 │   │   │   )                                                        │
+│   2025 │   │   else:                                                        │
+│                                                                             │
+│ D:\insight-agent-full\.venv\Lib\site-packages\langchain_openai\chat_models\ │
+│ base.py:1982 in _generate                                                   │
+│                                                                             │
+│   1979 │   │   │   │   raw_response =                                       │
+│        self.client.with_raw_response.create(**payload)                      │
+│   1980 │   │   │   │   response = raw_response.parse()                      │
+│   1981 │   │   except openai.BadRequestError as e:                          │
+│ > 1982 │   │   │   _handle_openai_bad_request(e)                            │
+│   1983 │   │   except openai.APIError as e:                                 │
+│   1984 │   │   │   _handle_openai_api_error(e)                              │
+│   1985 │   │   except Exception as e:                                       │
+│                                                                             │
+│ D:\insight-agent-full\.venv\Lib\site-packages\langchain_openai\chat_models\ │
+│ base.py:712 in _handle_openai_bad_request                                   │
+│                                                                             │
+│    709 │   │   │                                                            │
+│        "https://platform.openai.com/docs/guides/structured-outputs#supporte │
+│        d-schemas"                                                           │
+│    710 │   │   )                                                            │
+│    711 │   │   warnings.warn(message)                                       │
+│ >  712 │   raise OpenAIInvalidRequestError(                                 │
+│    713 │   │   message=e.message, response=e.response, body=e.body          │
+│    714 │   ) from e                                                         │
+│    715                                                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+OpenAIInvalidRequestError: Error code: 400 - {'error': {'message': "This 
+model's maximum context length is 4096 tokens. However, you requested 0 output 
+tokens and your prompt contains at least 4097 input tokens, for a total of at 
+least 4097 tokens. Please reduce the length of the input prompt or the number 
+of requested output tokens. (parameter=input_tokens, value=4097)", 'type': 
+'BadRequestError', 'param': 'input_tokens', 'code': 400}}
+[NOTE] During task with name 'writer' and id 
+'0c391143-b0db-f920-3f0e-47d05ec0198f'

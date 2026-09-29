@@ -490,6 +490,40 @@ python -X utf8 scripts/t3_otlp_export.py                      # 24 份已入库�
 
 ---
 
+### 4.15 同一份权重放到三个本地推理引擎上：吞吐、以及"这个项目到底跑不跑得起"
+
+JD 里那句"本地安装大模型推理平台 Ollama / vLLM / llama.cpp"一直在，但本仓库此前只证明过"走 OpenAI 兼容端点"，没证明过**MCC 装配出来的请求在本地引擎上真能跑**。§4.5 那句"换引擎只改三行配置"是一句承诺，这一节把它变成读数。契约 `docs/inference-bench-spec.md`，as-built 与全部失败形态 `docs/inference-bench.md`，驱动 `scripts/bench_engines.py`。
+
+```powershell
+python scripts/bench_engines.py --check --engine ollama,llamacpp,vllm   # prompt 档位 + 端点核对
+python scripts/bench_engines.py --engine llamacpp --conc 1,4            # 12 prompts × 10 次 × 两档并发
+python scripts/bench_engines.py --compat --engine vllm                  # MCC 计算器 / readonly-qa / Insight research
+python scripts/bench_engines.py --report all                           # 表格从盘上证据现算
+```
+
+一张表（RTX 3050 Laptop 4GB，Qwen2.5-1.5B-Instruct q4_K_M，`temperature=0`、`max_tokens=256`、同一批 prompt）：
+
+| 引擎 | 并发 | 成功率 | TTFT p50/p95 (ms) | 吞吐 p50 (tok/s) | 墙钟吞吐 (tok/s) |
+|---|---|---|---|---|---|
+| llama.cpp | 1 | 120/120 | 2088 / 2550 | 92.3 | 41.9 |
+| llama.cpp | 4 | **64/120** | 2175 / 2899 | 72.9 | 66.9 |
+| Ollama | 1 | 120/120 | 2085 / 2542 | 93.9 | 36.4 |
+| Ollama | 4 | 120/120 | **6556** / 8469 | 95.4 | 91.6 |
+| vLLM | 1 | 120/120 | 2142 / 2615 | **25.0** | 19.2 |
+| vLLM | 4 | 120/120 | 2160 / 2197 | 24.5 | 74.7 |
+
+四个读数，其中三个是本项目自己的问题：
+
+1. **"换引擎只改三行"这句话在 4096 上下文的本地引擎上不成立，而且原因在 MCC 自己身上。** 只读问答这一发，服务端报的 `n_prompt_tokens` 是 **5296（llama.cpp）/ 5278（Ollama）**，而用户文本只有 58 token、聊天模板 29 token —— 剩下 **5209 token 是 MCC 的固定开销**（系统提示 + 8–9 个工具模式 + 仓库符号地图）。三个引擎的 4096 配置都因此直接 400 掉这一发。修法不是把引擎换成更贵的，是把 `--max-turns`/`tools` 装配按本地档裁剪，或者把上下文要到 8K——这条已记进 §9 的诚实清单。
+2. **vLLM 拒的还不是同一件事。** 它两科 MCC 都死在 `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set`。注意措辞背后的事实：**MCC 一个字节都没发 `tool_choice`**（`grep tool_choice src/` 为空），是 vLLM 看见 `tools` 就按 auto 处理、又默认不带工具解析器。**给 vLLM 加两个 flag 才谈得上跑 Agent**，这不是可选优化。另一条同源的检查点：MCC 的客户端**只走非流式**（`openai_compat.py` 里没有 `stream`），所以 spec 问的"流式/非流式差异"在本项目里答案是"MCC 侧没有流式通路，流式只在 bench 客户端上被检验"——三个引擎的流式 `usage` 都正常，MCC 用的非流式路径工具模式也正常，两件事分别成立。
+3. **同一个 400 有三种信封。** llama.cpp 把它塞在 **HTTP 200 的流里**（`data: {"error":{"code":500,…}}`，个别 slot 还先吐一个 `(` 才断流）；Ollama 把整段错误 JSON 再包一层字符串；vLLM 用第三种措辞。所以"按状态码判成功"在本地引擎上是**会出假成功**的——脚本因此把成功定为 200 + 正常收流 + `finish_reason ∈ {stop,length}`，并把流内错误单独记成 `server_error` 字段（那一组 56 发就是这么抓出来的）。
+4. **客户端计量与引擎自报对得上，对不上的部分能解释。** completion 偏差中位 0.43%、最大单样本 3.57%；prompt 侧 22% 的中位偏差全部由恒定的 **+29 token 模板开销**解释（短 prompt 相对偏差 42–47%、长 prompt 只有 2.3–2.6%）。顺带纠正一条抄来的旧结论：spec 预言的"Ollama usage 粒度坑"**本轮未观测到**，0.34.4 认 `stream_options.include_usage`，0 次 400 回退。
+
+至于判据自己的弱点：`mcc-calc` 这一科按 spec 用退出码判定，而 llama.cpp 上出现过一次 **退出码 0、工作区一个文件都没写**（轨迹 `tools_offered=8 / tool_calls_executed=0`，模型把计划讲了一遍就结束），同一科另一次运行则 `exit=1`。两次结局相反都由 `previous_runs` 留在证据里。**A2 那种"退出码即完成"的判据挡不住只叙述不动手的模型**——这是这轮实测里最值钱的负面结果。
+
+**这一节不证明的**：① 不证明 vLLM 在这张卡上的上限（`--enforce-eager` 关 CUDA graph 是 4G 下的必要妥协、权重与 venv 都在 9P 挂载上、且 spec §7 明写不调优，25.0 tok/s 里这四件事分不开）；② **不外推到 7B**——4G 显存只跑得出 7B Q4_K_M `-ngl 20` 的参考行（12.7 tok/s、24/24），它进附表不进主表（D-2）；③ 不证明三引擎输出内容一致，只比吞吐与时延；④ 兼容九格在 1.5B 上做 planner/writer 的**质量**不作判据（报告空洞是实测事实，见 `report_chars` / `claims`）。
+
+
 ## 5. 工具清单
 
 模型看到的默认是 9 个工具（7 个住在 `tools/`，`write_todos` 住在 `agent/todo_tool.py`，`load_skill` 住在 `ext/skills.py`，见 §2 的依赖约束）。`load_skill` 只在技能目录非空时装配；接了 MCP 之后每个远端工具再多出几行，见 §4.11。风险级别决定它们在权限模式下的待遇。

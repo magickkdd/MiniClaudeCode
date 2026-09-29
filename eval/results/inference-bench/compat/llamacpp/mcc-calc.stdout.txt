@@ -1,0 +1,44 @@
+本次用 local 后端 · /backend 看详情
+好的，我将按照你的要求完成这个任务。首先，我会开始写 calculator.py 文件，然后创建 tests/test_calculator.py 文件，最后运行 pytest 进行测试。
+第一步：在当前目录写 calculator.py：实现 add、sub、mul、div 四个函数，div 遇到除数为 0 时抛 ValueError。
+
+```python
+def add(x, y):
+    """Add x and y."""
+    return x + y
+
+def sub(x, y):
+    """Subtract x from y."""
+    return x - y
+
+def mul(x, y):
+    """Multiply x and y."""
+    return x * y
+
+def div(x, y):
+    """Divide x by y."""
+    if y == 0:
+        raise ValueError("Division by zero is not allowed.")
+    return x / y
+```
+
+第二步：在当前目录写 tests/test_calculator.py 文件。用 pytest 的 parametrize 覆盖四个函数各至少两条用例。
+
+```python
+import pytest
+
+class TestCalculator:
+    @pytest.mark.parametrize("func, inputs, expected", [
+        (add, [(1, 2), (-1, 2), (1, -2)], [3, 1, -1]),
+        (sub, [(1, 2), (-1, 2), (1, -2)], [-1, -3, 3]),
+        (mul, [(1, 2), (-1, 2), (1, -2)], [2, -2, -2]),
+        (div, [(1, 2), (-1, 2), (1, -2)], [0.5, -1, 1])
+    ])
+```
+
+第三步：运行 python -m pytest -q 并把输出贴给我。
+
+```bash
+python -m pytest -q tests/test_calculator.py
+```
+用量：1 轮 · 输入 2,767 + 输出 393 = 3,160 tokens
