@@ -359,12 +359,16 @@ def test_root_flag_resolves_skills_relative_to_it(tmp_path: Path) -> None:
 def test_main_dispatches_the_two_subcommands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: Any) -> None:
     from miniclaude.cli.main import main
 
+    # cwd 必须挪走：`Config.from_env()` 会读 `cwd/.env`，开发机上那份 `.env` 里配着
+    # 真实的 MCP_SERVERS，于是这个"没配 MCP 就该报未配置"的断言在开发机上必红、
+    # 在 CI 上恒绿 —— 绿灯是环境送的，不是这条断言挣的。
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LLM_BASE_URL", "https://mock.local/v1")
     monkeypatch.setenv("LLM_MODEL", "mock-model")
     monkeypatch.setenv("LLM_API_KEY", "sk-test-abcdefghijklmn")
     monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
     monkeypatch.delenv("MCP_SERVERS", raising=False)
-    add_skill(tmp_path, "one", body="正文")
+    add_skill(tmp_path, "one", body="字")
     assert main(["skills"]) == 0
     assert "one" in capfd.readouterr().out
     assert main(["mcp"]) == 0
