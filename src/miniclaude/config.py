@@ -35,6 +35,10 @@ DEFAULTS: dict[str, Any] = {
     # 名字与 endpoint 的语义校验只有一个产地：`MCPServerSpec.from_mapping`；在这里
     # 再抄一遍正则，就是 §3.4.1-5 拒绝过的双旋钮。
     "MCP_SERVERS": "",               # 空 = 一个外部工具都不接
+    # mcp-link-spec P1：远端分钟级长任务（insight-agent 的 research fast 档实测 ≈90s）
+    # 撞不上这条预算就等不来回答。只管 tools/call；握手与 tools/list 不归它管 ——
+    # 起不来的服务要在会话开始时就报错，而不是让用户等十分钟才知道配置错了。
+    "MCP_TOOL_TIMEOUT": 600,
     "SKILLS_DIR": "skills",          # 技能根目录；不存在就等于没有技能
 }
 
@@ -90,6 +94,7 @@ class Config:
     memory_dir: str = str(DEFAULTS["MEMORY_DIR"])
     # 已经过形状校验的 server 描述（字典原样交下去，语义校验在 MCPServerSpec.from_mapping）
     mcp_servers: tuple[dict[str, Any], ...] = ()
+    mcp_tool_timeout: int = DEFAULTS["MCP_TOOL_TIMEOUT"]
     skills_dir: str = str(DEFAULTS["SKILLS_DIR"])
 
     @classmethod
@@ -136,6 +141,11 @@ class Config:
         if not skills_dir or ".." in Path(skills_dir).parts:
             raise ConfigError(f"SKILLS_DIR 不能为空或包含 ..，当前值：{skills_dir!r}")
         servers = _mcp_servers()
+        tool_timeout = _int("MCP_TOOL_TIMEOUT")
+        if tool_timeout < 1:
+            raise ConfigError(
+                f"MCP_TOOL_TIMEOUT({tool_timeout}) 至少 1 秒：它是一次远端调用的全部预算。"
+            )
 
         return cls(
             base_url=base_url,
@@ -161,6 +171,7 @@ class Config:
             checkpoints=bool(_int("CHECKPOINTS")),
             memory_dir=memory_dir,
             mcp_servers=servers,
+            mcp_tool_timeout=tool_timeout,
             skills_dir=skills_dir,
         )
 
@@ -201,6 +212,7 @@ class Config:
             # 只报名字与计数：endpoint 与 args 里可能带着凭据，那两个字段是
             # `MCPServerSpec.as_trace()` 自己负责脱敏之后才进 trace 的，配置视图里不重复暴露。
             "mcp_servers": [str(item.get("name", "")) for item in self.mcp_servers],
+            "mcp_tool_timeout": self.mcp_tool_timeout,
             "skills_root": str(self.skills_root),
         }
 

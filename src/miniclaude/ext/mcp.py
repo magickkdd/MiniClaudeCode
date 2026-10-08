@@ -308,7 +308,15 @@ class _StdioSession:
 
     # ------------------------------------------------------------- 报文
 
-    def request(self, method: str, params: Mapping[str, Any] | None = None) -> Any:
+    def request(
+        self,
+        method: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
+        """一次问答。`timeout` 是这一条的单独预算（不写就用会话缺省）：
+        tools/call 的分钟级长任务与握手的"起不来要快点知道"不该共用一根线。"""
         if self.proc is None:
             raise MCPError(f"MCP server {self.spec.name} 没在跑")
         self._next_id += 1
@@ -317,9 +325,10 @@ class _StdioSession:
         if params is not None:
             payload["params"] = dict(params)
         self._write(payload)
-        deadline = time.monotonic() + self.timeout
+        budget = self.timeout if timeout is None else timeout
+        deadline = time.monotonic() + budget
         while True:
-            line = self._readline(deadline)
+            line = self._readline(deadline, budget)
             try:
                 message = json.loads(line)
             except json.JSONDecodeError:
@@ -357,14 +366,14 @@ class _StdioSession:
         except OSError as exc:
             raise MCPError(f"写给 MCP server {self.spec.name} 时断了：{exc}") from exc
 
-    def _readline(self, deadline: float) -> str:
+    def _readline(self, deadline: float, budget: float) -> str:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise MCPError(self._fault(f"回答超时（{self.timeout:g}s）"))
+            raise MCPError(self._fault(f"回答超时（{budget:g}s）"))
         try:
             line = self._lines.get(timeout=remaining)
         except queue.Empty as exc:
-            raise MCPError(self._fault(f"回答超时（{self.timeout:g}s）")) from exc
+            raise MCPError(self._fault(f"回答超时（{budget:g}s）")) from exc
         if line is None:
             raise MCPError(self._fault(f"关掉了输出（进程退出码 {self._exit_code()}）"))
         return line
@@ -428,11 +437,17 @@ class RemoteTool(BaseTool):
 
 @dataclass
 class MCPBridge:
-    """持有若干 `_StdioSession`，把 tools/list 变成 BaseTool 列表。"""
+    """持有若干 `_StdioSession`，把 tools/list 变成 BaseTool 列表。
+
+    两根线各管一头（mcp-link-spec P1）：`timeout` 管握手与发现 —— 配置错了要在
+    会话开始时就知道；`tool_timeout` 管单次 tools/call —— insight-agent 的 research
+    fast 档实测 ≈90s，fixed 30s 的会话线必然误杀它。`MCP_TOOL_TIMEOUT` 是后者的配置名。
+    """
 
     servers: Sequence[MCPServerSpec]
     workspace: Workspace
     timeout: float = 30.0
+    tool_timeout: float = 600.0
     _sessions: dict[str, _StdioSession] = field(default_factory=dict, repr=False)
     status: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
@@ -511,7 +526,9 @@ class MCPBridge:
         """远端调用。**永不抛异常** —— 报错是模型的输入（tools/base.py 的铁律）。"""
         try:
             session = self._existing(server)
-            result = session.request("tools/call", {"name": remote_name, "arguments": dict(args)})
+            result = session.request(
+                "tools/call", {"name": remote_name, "arguments": dict(args)}, timeout=self.tool_timeout
+            )
         except MCPError as exc:
             self._drop(server)  # 挂死的服务不能留着毒化后面每一次调用
             return ToolResult.err(str(exc))

@@ -51,7 +51,7 @@ def _bridge_from(config: Config) -> tuple[MCPBridge | None, str, list[str]]:
 
     # 这个命令只需要一个 Workspace 实例给工具当截断器 —— 它不碰任何文件。
     workspace = Workspace(config.project_root, output_limit=config.tool_output_limit)
-    bridge = MCPBridge(servers=specs, workspace=workspace)
+    bridge = MCPBridge(servers=specs, workspace=workspace, tool_timeout=config.mcp_tool_timeout)
     bridge.discover()
     return bridge, "", names
 

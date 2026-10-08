@@ -10,7 +10,7 @@ S14 ✅（MCP bridge + Skills，D19/D20，§3.7.2）· S15-a ✅ **D21 那道 20
 S15-b ✅（§3.9 trajectory exporter：1,034 行、丢弃 0、12/12 前提绿，顺手挖出并修掉四处数据完整性缺陷 + 自己首版的一处越界，§3.9.1）·
 **§7.3-7 ✅**（manifest ↔ trace 同一性：内容指纹在唯一的产出处盖章，导出前验证，不符即丢弃。缺口 ① 关闭，13 个批次实测 0 行 drift）·
 **§7.3-3 ✅**（OTLP 导出器 `infra/otel.py`：24 份已入库轨迹 → 18 条判据 17 ✓ + 1 未量，值/结构/时间/两条路四本账全部从 payload 反查，顺手挖出导出器替轨迹撒的四个谎 + 证据自己的一句谎话，§7.3 第 3 条）·
-**README §10 第 30 行 ✅**（证据写盘的守卫从"只修了一个脚本"收口成 `scripts/_evidence.py` 一支笔，五个写证据的脚本共用；口径修正为"只量覆盖不量结论"，判据翻红照写。测试 828 → 849）·
+**docs/spec-deviations.md 第 30 行 ✅**（证据写盘的守卫从"只修了一个脚本"收口成 `scripts/_evidence.py` 一支笔，五个写证据的脚本共用；口径修正为"只量覆盖不量结论"，判据翻红照写。测试 828 → 849）·
 **下一步 Tier 3**（§7.3：B3 在 ≥5 文件任务上重测、B5 复活评估、trace 落 observation —— 剩余项全需要人手或额度，离线可做的已做完）
 
 基线：`main @ 6a73e32`（v1.0 已交付并推送 `magickkdd/MiniClaudeCode`）
@@ -39,7 +39,7 @@ v1.0 的产物是一个 agent。v2.0 的产物是**围绕这个 agent 的那套�
 | 其中与 Agent 能力相关 | 195（`test_hanoi.py` 6 项是汉诺塔练习题，由可视化材料提交带入，非本项目能力证据） | 逐文件收集 |
 | 工具数 | 8（`tools/` 7 个 + `agent/todo_tool.py` 的 `write_todos`） | `registry.py:70-78` |
 | demo 与证据 | 5 个 demo、9 份证据文件、fake 5/5、live 4/4 | `demos/results/` |
-| 已知局限 | 8 条（README §9）+ 8 条 SPEC 偏差记录（README §10） | README |
+| 已知局限 | 8 条（README §9）+ 8 条 SPEC 偏差记录（README §10，表格已移到 docs/spec-deviations.md） | README |
 | 依赖 | `httpx` + `python-dotenv`，`rich` 可选；无 pydantic、无 SDK、无框架 | `pyproject.toml` |
 
 **口径修正**：从此以后对外报的"测试数"必须写成"195 项 Agent 能力测试 + 6 项无关收集"，或直接按目录分组报。单一总数会被 `test_hanoi.py` 这种文件污染 —— 这正是 §3.1 要解决的"指标产地"问题的一个缩影。
@@ -58,7 +58,7 @@ v1.0 的产物是一个 agent。v2.0 的产物是**围绕这个 agent 的那套�
 - 勘误 1：SPEC v1 §3.8 的 `session_end` → 实际事件名为 `run_end`。v2 采纳 `run_end`，并新增 §3.1 的 **schema 快照测试**，让这类漂移在 CI 里失败而不是在报表里静默。
 - 勘误 2：SPEC v1 §3.7 的 `redundant_call_rate` 定义拆成两个指标（§3.1）：`repeated_call_rate`（逐调用：与前一次同名同参）与 `stalled_group_rate`（整组：命中停滞检测的轮次数）。
 
-另有一条不算 bug 但影响解读的事实：**fake 引擎的轨迹里 `usage` 与 `context_peak_tokens` 全为 0**（`FakeLLM` 不返回 usage）。所以 README §7.3 表格里 fake 列本来就没有 token 数 —— 这是正确的，但同一张表把"轮数/调用数/报错数"混排，容易让人误读成 fake 也在证明成本行为。**v2 的证据模板必须按"这份证据证明了什么"分栏**（§6.4）。
+另有一条不算 bug 但影响解读的事实：**fake 引擎的轨迹里 `usage` 与 `context_peak_tokens` 全为 0**（`FakeLLM` 不返回 usage）。所以 README §7 的 demo 结果表里 fake 列本来就没有 token 数 —— 这是正确的，但同一张表把"轮数/调用数/报错数"混排，容易让人误读成 fake 也在证明成本行为。**v2 的证据模板必须按"这份证据证明了什么"分栏**（§6.4）。
 
 ## 0.4 端点能力实测（`scripts/probe_caps.py`，2026-09-22，`agnes-2.5-flash`）
 

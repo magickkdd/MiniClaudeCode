@@ -175,7 +175,7 @@ def build_session(
             except MCPSpecError as exc:
                 # 配置写错 → 启动即失败。一个起不来的服务被跳过，用户会以为功能在。
                 raise ConfigError(str(exc)) from exc
-            bridge = MCPBridge(servers=specs, workspace=workspace)
+            bridge = MCPBridge(servers=specs, workspace=workspace, tool_timeout=cfg.mcp_tool_timeout)
             extra.extend(bridge.discover())
     skills = SkillLoader(cfg.skills_root)
     skill_rows = skills.manifests()

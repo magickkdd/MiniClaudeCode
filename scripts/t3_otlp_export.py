@@ -21,7 +21,8 @@ SPEC v2 §7.3-3 的原话是「字段已在 S8 对齐，这一步只有翻译」
   对应的 detector 必须红：吃值、造名、空串冒充 null、漏密钥、改边、错挂边、伪造时长、抹戳、
   资源属性与 trace 不符、往收集端探针的 payload 里塞一条绝对路径。
   红不了的 detector 给出的 ✓ 等于零 —— 这一节是给上面那些 ✓ 定价的。
-· **写盘之前先跟盘上那份比**（`scripts/_evidence.py` 的 `write_evidence`）。README §10 第 30 行
+· **写盘之前先跟盘上那份比**（`scripts/_evidence.py` 的 `write_evidence`）。
+  `docs/spec-deviations.md` 第 30 行（原 README §10）
   记着这条守卫原先只有 `b2_compact_ab.py` 有；现在四个写证据的脚本共用一把尺，
   而"变薄"的定义写在每个脚本自己的 `_metrics()` 里 —— 只量覆盖，不量结论。
 · **"本机没有收集端"这一句是量出来的**（`_collector`，默认打 `localhost:4318`）。发出去的是
