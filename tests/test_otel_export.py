@@ -203,6 +203,59 @@ def test_no_record_is_lost(path: Path) -> None:
     assert validate(payload) == []
 
 
+def test_each_session_gets_its_own_tree(tmp_path: Path) -> None:
+    """一个文件里第二个会话不能挂到第一个会话的树上。
+
+    这是真实踩到的：连续跑 `--task` 把 6 个会话写进同一个文件，导出器拿全文件第一个
+    session span 当唯一锚点，于是后面 5 个会话的 span 全被接到会话 1 底下 —— 收集端
+    按 `traceId` 归组后发现父亲不在本trace，画出一棵断头树。`validate()` 会报出来，
+    但那时 payload 已经发出去了。
+    """
+    records: list[dict[str, Any]] = []
+    for index, session in enumerate(("s1", "s2")):
+        trace = f"{index + 1:032x}"
+        # span_id 必须逐会话唯一（真实轨迹就是这样），否则两组记录会被并成同一个 span，
+        # 测的就不是"两棵树"而是"一棵残树"了。
+        seed = (index + 1) * 4
+        session_span, run_span, turn_span = (f"{seed + offset:016x}" for offset in (1, 2, 3))
+        for seq, record in enumerate(
+            (
+                {"kind": "session_start", "span_id": session_span, "trace_id": trace, "session": session},
+                {"kind": "run_start", "span_id": run_span, "trace_id": trace, "session": session},
+                {"kind": "turn_start", "span_id": turn_span, "trace_id": trace, "session": session,
+                 "parent_span_id": run_span},
+                # 无 span_id 的记录：必须回到**自己**会话的 turn 上，不能就近抓别人家的
+                {"kind": "todo_update", "trace_id": trace, "session": session, "turn": 1},
+            ),
+            start=index * 10 + 1,
+        ):
+            records.append({**record, "seq": seq})
+
+    payload, cov = translate(records)
+    assert cov["unaccounted"] == 0
+    assert validate(payload) == []          # 断头树就在这里被拒
+
+    spans = spans_of(records)
+    owner = {span.span_id: span.trace_id for span in spans}
+    for span in spans:
+        if span.parent_span_id is not None:
+            assert owner[span.parent_span_id] == span.trace_id, "跨 trace 的父子关系"
+
+    # 每个 trace 恰好一棵以 session span 为根的树
+    for session in ("s1", "s2"):
+        mine = [s for s in spans if s.session == session]
+        roots = [s for s in mine if s.parent_span_id is None]
+        assert len(roots) == 1 and roots[0].role == "session"
+
+    # 记录顺序不是语义：倒着喂同一批记录，长出来的树必须一模一样
+    def shape(ordered: list[dict[str, Any]]) -> list[tuple[str, str | None]]:
+        return sorted(
+            (s.span_id, s.parent_span_id) for s in spans_of(ordered)
+        )
+
+    assert shape(records) == shape(list(reversed(records)))
+
+
 @pytest.mark.parametrize("path", TRACES, ids=lambda p: f"{p.parent.name}/{p.name}")
 def test_time_never_runs_backwards(path: Path) -> None:
     payload, _ = translate(replay(path))

@@ -285,8 +285,25 @@ def spans_of(records: list[dict[str, Any]]) -> list[Span]:
 
     spans = [_make_span(span_id, group) for span_id, group in groups.items()]
     orphans: dict[str, Span] = {}
-    session_span = next((s for s in spans if s.role == "session"), None)
-    anchor = session_span or next((s for s in spans if s.role == "run"), None) or (spans[0] if spans else None)
+    # 根必须**按 trace 各算各的**。一个日志文件可以躺着好几个会话（连续跑 `--task`、
+    # 多客户端并排），拿全文件第一个 session span 当唯一锚点，会把后面几个会话的 span
+    # 挂到前一个会话的树上 —— 那是跨 trace 编出一棵树，收集端画出来是断头的。
+    # 这个 bug 在只有单会话轨迹的批次里看不见，第一次被 `mcp-link-t3-standard.jsonl`
+    # （6 个会话躺在同一个文件）钉出来。
+    roots: dict[str, Span] = {}
+    for role in ("session", "run"):
+        for span in spans:
+            if span.parent_span_id is None and span.role == role:
+                # 同一 trace 里 `session` 优先于 `run`；同级多个候选取最早那条。
+                # 选根不能依赖"先遇到哪个" —— span 的顺序由记录顺序决定，
+                # 倒着喂同一批记录必须长出同一棵树（`test_payload_is_deterministic`）。
+                current = roots.get(span.trace_id)
+                if current is None or _seq(span.records[0]) < _seq(current.records[0]):
+                    roots[span.trace_id] = span
+    fallback = next((s for s in spans if s.role == "session"), None) or next(
+        (s for s in spans if s.role == "run"), None
+    ) or (spans[0] if spans else None)
+
     known = {s.span_id for s in spans}
     for span in spans:
         if span.parent_span_id is not None and span.parent_span_id not in known:
@@ -294,10 +311,12 @@ def spans_of(records: list[dict[str, Any]]) -> list[Span]:
             # 但那个断掉的 id 要留在属性里 —— 丢了它就没有任何线索可查。
             span.detached_parent = span.parent_span_id
             span.parent_span_id = None
-        elif span.parent_span_id is None and span is not anchor:
+        elif span.parent_span_id is None:
             # `run_start` 与 `session_start` 都不写 parent（会话只有一个 run），
-            # 但层级要成树，所以缺父亲的统一挂到会话 span 上。
-            span.parent_span_id = anchor.span_id if anchor is not span else None
+            # 但层级要成树，所以缺父亲的统一挂到**本条 trace 自己的**根上；
+            # 本 trace 连 session/run span 都没有时，它自己就是根（parent 留空，不硬凑）。
+            root = roots.get(span.trace_id)
+            span.parent_span_id = root.span_id if root is not None and root is not span else None
 
     model = _model_of(clean)
     for span in spans:
@@ -307,7 +326,7 @@ def spans_of(records: list[dict[str, Any]]) -> list[Span]:
             span.name = f"chat {model}"
 
     for record in headless:
-        host = _host_for(record, spans, anchor)
+        host = _host_for(record, spans, roots, fallback)
         if host is None:
             # 一个 span 都没有（v1 轨迹全是无 id 记录）：造一个承载 span，
             # 否则这些记录就只能被丢掉 —— 而丢掉记录正是这里唯一不允许的事。
@@ -379,7 +398,10 @@ def _session_of(group: list[dict[str, Any]]) -> str:
 
 
 def _host_for(
-    record: dict[str, Any], spans: list[Span], anchor: Span | None
+    record: dict[str, Any],
+    spans: list[Span],
+    roots: dict[str, Span],
+    fallback: Span | None,
 ) -> Span | None:
     """无 span_id 的记录找归属：先看同一轮的 turn span，再退到它前面的 run span。
 
@@ -397,7 +419,16 @@ def _host_for(
         if span.role in ("session", "run") and _seq(span.records[0]) <= seq:
             if best is None or _seq(span.records[0]) >= _seq(best.records[0]):
                 best = span
-    return best or anchor
+    if best is not None:
+        return best
+    # 退路也要限定在本 trace 内：拿别的会话的 span 当宿主，等于凭空造一条跨 trace 的边。
+    trace = _trace_hex(str(record.get("trace_id") or record.get("session") or "unknown"), 32)
+    root = roots.get(trace)
+    if root is not None:
+        return root
+    if fallback is not None and fallback.trace_id == trace:
+        return fallback
+    return None
 
 
 def _record_turn(span: Span) -> Any:
