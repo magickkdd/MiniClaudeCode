@@ -303,11 +303,20 @@ class Classifier:
         )
 
     def _thrashing(self) -> Finding | None:
-        if self.facts.stalled_groups <= 0:
+        """一轮重复是**恢复**，两轮才是空转 —— 阈值必须和主循环自己的定义对齐。
+
+        `agent/loop.py` 的 `STALL_LIMIT = 3`：整组调用签名连续重复到第三轮才判 `stalled`
+        并终止。所以"重试一轮就成功"是这套机制的**预期行为**，不是病。
+        这里原来写成 `stalled_groups >= 1`，于是 `mcp-link-t3-standard` 那条轨迹被判成空转 ——
+        读下来是 research 撞云端 429 → 原参数重试 → 成功 → 写文件 → 收尾，
+        一次教科书式的失败重试，被贴上了"空转"的标签。
+        判据宁可漏报不误报（见本模块开头），所以门槛抬到两轮：三轮连续重复才算空转。
+        """
+        if self.facts.stalled_groups < 2:
             return None
         return Finding(
             FailureMode.THRASHING,
-            f"命中停滞检测 {self.facts.stalled_groups} 次（整组调用连续重复）",
+            f"命中停滞检测 {self.facts.stalled_groups} 次（整组调用连续重复两轮以上）",
         )
 
     def _permission_starved(self) -> Finding | None:

@@ -214,6 +214,17 @@ def test_thrashing_reads_stalled_groups() -> None:
     assert labels(RunFacts(termination="stalled", stalled_groups=3)) == ["thrashing"]
 
 
+def test_one_repeated_round_is_recovery_not_thrashing() -> None:
+    """重试一轮就成功，是 `STALL_LIMIT=3` 这套机制的预期行为，不该贴"空转"。
+
+    `mcp-link-t3-standard.jsonl` 的第 6 个会话：research 撞云端 429 → 原参数重试 → 成功
+    → 写文件 → completed。人工读这条轨迹的结论是"恢复"，规则原来给的是"空转"。
+    阈值必须和主循环自己的定义对齐：`loop.py` 里连续三轮才判 `stalled` 并终止。
+    """
+    assert labels(RunFacts(termination="completed", stalled_groups=1)) == []
+    assert "thrashing" in labels(RunFacts(termination="stalled", stalled_groups=2))
+
+
 def test_permission_starved_uses_attempts_as_the_denominator() -> None:
     """4 次发起里 2 次被拒 = 50% 命中；6 次里 2 次 = 33% 不命中。
 

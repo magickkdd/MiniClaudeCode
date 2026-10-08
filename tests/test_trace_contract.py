@@ -566,9 +566,11 @@ def test_attempts_and_executions_are_two_different_numbers(session: Any) -> None
     assert report["tool_executed"] == 3, "只有 3 次真的跑过"
     assert report["denied_actions"] == 1, "denied 只数权限门拒的，虚构工具名不算用户拒绝"
     assert report["tool_errors"] == 2, "被拒与虚构都给了模型一个 is_error 结果"
-    # 只有 thrashing：整组重演了一次。no_verification 不成立 —— 这次会话一个字没写，
-    # 被拒的 write_file 不算"改过东西"（判据见 infra/failure.py 的同名规则）。
-    assert report["failure_modes"] == ["thrashing"]
+    # 这次会话一个字没写，所以 `no_verification` 不成立（判据见 infra/failure.py 的同名规则）；
+    # 整组只重演了一轮（`stalled_groups=1`），也够不上 `thrashing` 的两轮门槛 —— 两个都是空。
+    # 门槛为什么是"两轮"见 `test_one_repeated_round_is_recovery_not_thrashing`：
+    # `loop.py` 的 `STALL_LIMIT=3` 定的就是三轮，一轮重复是恢复不是空转。
+    assert report["failure_modes"] == []
 
 
 def test_output_chars_is_summed_from_records(session: Any) -> None:
