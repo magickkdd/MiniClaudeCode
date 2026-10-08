@@ -119,6 +119,23 @@ EXPECT: dict[str, tuple[list[str], str]] = {
         "改→跑→再改→再跑，最后 completed、判据 PASS。但 v1 轨迹没有 verdict 字段，"
         "这条只能证明'没被误报'，证不了'规则真的看得见红绿'",
     ),
+    # ---- mcp-link 联动（docs/mcp-link-spec.md 的 as-built 那两条）----
+    "mcp-link-t2.jsonl": (
+        ["no_verification"],
+        "3 轮 2 次调用：第 1 轮 `mcp__insight-agent__research`（ok）→ 第 2 轮 `write_file` 落 "
+        "notes.md → 第 3 轮 completed。贴 `no_verification` 是对的：写完之后**一次都没回读** "
+        "落盘结果，报告里那 9 个 URL 对不对它自己不知道，判据是从盘上读文件验的、"
+        "不是从模型自述读的 —— 这正是这条规则要抓的东西。`thrashing` 不贴：只有一次 research。",
+    ),
+    "mcp-link-t3-standard.jsonl": (
+        ["no_verification"],
+        "**一个文件里 6 个会话**（前 5 个各死于云端 HTTP 429，终止原因 `llm_failure`，标签为空），"
+        "第 6 个会话 4 轮跑完：第 1 轮 research 撞 429 → 第 2 轮**原参数重试成功** → 第 3 轮 "
+        "write_file → completed。"
+        "`thrashing` 原来贴在这里，是误报：重试一轮就成功正是 `STALL_LIMIT=3` 这套机制的预期行为，"
+        "读下来是恢复不是空转，阈值已从 `>=1` 抬到 `>=2`。`no_verification` 保留，理由同 t2。"
+        "这条也是 `facts_from_records` 按会话分的第一个实测样本（run_end 的计数逐会话覆盖）。",
+    ),
 }
 
 _ACTUAL_RE = re.compile(r"\| actual \| `(?P<term>[^`]+)` · 判定 (?P<verdict>PASS|FAIL)")

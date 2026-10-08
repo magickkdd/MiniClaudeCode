@@ -15,6 +15,8 @@
 | `codegen.fake.jsonl` | 8/9 | PASS / completed | （无） | （无） | ✓ | — |
 | `codegen.live.jsonl` | 8/16 | PASS / completed | （无） | （无） | ✓ | — |
 | `giveup.fake.jsonl` | 6/6 | PASS / max_turns | budget_exhausted | budget_exhausted | ✓ | — |
+| `mcp-link-t2.jsonl` | 3/2 | （无证据文件） | no_verification | no_verification | ✓ | — |
+| `mcp-link-t3-standard.jsonl` | 14/3 | （无证据文件） | no_verification | no_verification | ✓ | — |
 | `readonly-qa.fake.jsonl` | 3/4 | PASS / completed | （无） | （无） | ✓ | — |
 | `readonly-qa.live.jsonl` | 4/6 | PASS / completed | （无） | （无） | ✓ | — |
 | `red-tests.fake.jsonl` | 10/9 | PASS / completed | （无） | （无） | ✓ | — |
@@ -34,6 +36,8 @@
 - `codegen.fake.jsonl`：写实现→跑测试→再写→再跑，最后 completed；两次 run_tests 都绿，无标签
 - `codegen.live.jsonl`：第 4 轮 pytest 判红，随后两次 edit_file 都落在实现 `calculator/core.py` 的 `_tokenize` 上，第 6 轮转绿、README 落盘、待办全 done。测试从头到尾没被回改 —— `test_gaming` 沉默是对的
 - `giveup.fake.jsonl`：max_turns 收尾且待办全未完成；这正是 A4 设计出来的失败形状
+- `mcp-link-t2.jsonl`：3 轮 2 次调用：第 1 轮 `mcp__insight-agent__research`（ok）→ 第 2 轮 `write_file` 落 notes.md → 第 3 轮 completed。贴 `no_verification` 是对的：写完之后**一次都没回读** 落盘结果，报告里那 9 个 URL 对不对它自己不知道，判据是从盘上读文件验的、不是从模型自述读的 —— 这正是这条规则要抓的东西。`thrashing` 不贴：只有一次 research。
+- `mcp-link-t3-standard.jsonl`：**一个文件里 6 个会话**（前 5 个各死于云端 HTTP 429，终止原因 `llm_failure`，标签为空），第 6 个会话 4 轮跑完：第 1 轮 research 撞 429 → 第 2 轮**原参数重试成功** → 第 3 轮 write_file → completed。`thrashing` 原来贴在这里，是误报：重试一轮就成功正是 `STALL_LIMIT=3` 这套机制的预期行为，读下来是恢复不是空转，阈值已从 `>=1` 抬到 `>=2`。`no_verification` 保留，理由同 t2。这条也是 `facts_from_records` 按会话分的第一个实测样本（run_end 的计数逐会话覆盖）。
 - `readonly-qa.fake.jsonl`：只读问答，一个字节没写 —— 不该要求它跑测试（v1 规则在这里误报过）
 - `readonly-qa.live.jsonl`：只读问答、判据 PASS。第 1 轮猜错两个路径（`format.py`、`test_format.py`）后自己 find_files 纠正：2 个 < 阈值 3，不贴 `path_guessing`；这一轮没有权限拒绝，也不该要求它跑测试
 - `red-tests.fake.jsonl`：改的是 cart/ 实现，tests/ 未被改写；最后一次验证是绿的
