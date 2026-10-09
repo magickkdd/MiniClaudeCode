@@ -35,14 +35,17 @@ v1.0 的产物是一个 agent。v2.0 的产物是**围绕这个 agent 的那套�
 | 项 | 实测值 | 来源 |
 |---|---|---|
 | `src/` 代码量 | 3423 行（最大 `loop.py` 370、`cli/main.py` 336、`openai_compat.py` 296、`permissions.py` 209） | `wc -l` |
-| 测试收集数 | **201** collected（README 写的 195 是 `tests/test_hanoi.py` 的 6 项进入收集范围之前的数） | `pytest --collect-only -q` |
-| 其中与 Agent 能力相关 | 195（`test_hanoi.py` 6 项是汉诺塔练习题，由可视化材料提交带入，非本项目能力证据） | 逐文件收集 |
+| 测试收集数 | **871** collected、另 2 项按设计 skip | `pytest --collect-only -q` |
 | 工具数 | 8（`tools/` 7 个 + `agent/todo_tool.py` 的 `write_todos`） | `registry.py:70-78` |
 | demo 与证据 | 5 个 demo、9 份证据文件、fake 5/5、live 4/4 | `demos/results/` |
 | 已知局限 | 8 条（README §9）+ 8 条 SPEC 偏差记录（README §10，表格已移到 docs/spec-deviations.md） | README |
 | 依赖 | `httpx` + `python-dotenv`，`rich` 可选；无 pydantic、无 SDK、无框架 | `pyproject.toml` |
 
-**口径修正**：从此以后对外报的"测试数"必须写成"195 项 Agent 能力测试 + 6 项无关收集"，或直接按目录分组报。单一总数会被 `test_hanoi.py` 这种文件污染 —— 这正是 §3.1 要解决的"指标产地"问题的一个缩影。
+**这条口径修正已被后续的删除兑现**：`tests/test_hanoi.py` 与 `demos/hanoi.py` 是汉诺塔练习题，
+由可视化学习材料带入，与 Agent 能力无关，现已从仓库删除 —— 对外报的测试数不再被它污染。
+剩下的 871 项全部落在本项目的能力面上（`pytest --collect-only -q` 实测）。
+当初那条「单一总数会被无关文件污染」的判断本身是对的，只是当时的修法是加脚注，
+更好的修法是把无关的东西删掉。
 
 ## 0.3 v1.0 度量谎报清单（v2 的开工依据，必须先修）
 
@@ -1583,5 +1586,5 @@ JD 第 1 项（★★★★★）真正筛的是**判断力**，而判断力的�
 ## 附：三问的当前状态（2026-09-22）
 
 1. **R1 上下文窗口探针** —— **已答，已做**。你选了「跑受控二分探针」，实测 270,570 prompt token 被正常接受 ⇒ 窗口 ≥ 270k。结论与其对 §3.3 的冲击已写进正文（`TOKEN_BUDGET` 32000 / `CONTEXT_HARD_LIMIT` 200000 拆分）。**这次探测的结论是"设计前提被证伪"，不是"确认了原来的拍值"** —— 如果没跑，S10 会按一条永远不会触发的分支写完并当成已验证。
-2. **`tests/test_hanoi.py`** —— 未决，我按"保留 + 报表按目录分组"处理（不动别人的提交）。你要是想让它离开这个仓库，说一声我移到 `demos/` 之外并保留历史。
+2. **`tests/test_hanoi.py`** — 唯一被如实标为「外部练习、与本仓库能力说明无关」的测试依赖，现已删除。
 3. **实施节奏** —— **已答**：你选了「S8 度量修补开工」。我按 Stage 交付：S8 做完出报告并立刻进 S9，不攒批。

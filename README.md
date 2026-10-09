@@ -41,14 +41,14 @@ python main.py                # 进 REPL，或 python main.py --task "把 durati
 不装也能跑（`python main.py` 直进 REPL），离线跑完整个循环与评测：
 
 ```bash
-python -m pytest -q                        # 877 项测试，FakeLLM 驱动、不联网、不读 .env
+python -m pytest -q                        # 871 项测试，FakeLLM 驱动、不联网、不读 .env
 python demos/run_demo.py --all --engine fake   # 五个 demo 秒级跑完
 python -m miniclaude eval --repeats 3      # 24 题离线评测，报一个可被反驳的通过率
 ```
 
 ## 当前状态
 
-**877 项测试全绿（另有 2 项按设计跳过）。** 每一层能力都配了一条"能被反驳"的判据和一个盘上的证据文件；没达成的、没测到的都写在 §9 与 [`docs/experiments.md`](docs/experiments.md) 里，而不是从报告里拿掉。
+**871 项测试全绿（另有 2 项按设计跳过）。** 每一层能力都配了一条"能被反驳"的判据和一个盘上的证据文件；没达成的、没测到的都写在 §9 与 [`docs/experiments.md`](docs/experiments.md) 里，而不是从报告里拿掉。
 
 | 交付线 | 判据 | 实到 |
 |---|---|---|
@@ -302,7 +302,7 @@ python demos/run_demo.py --demo bug-hunt --engine live
 ## 8. 测试
 
 ```bash
-python -m pytest -q                # 877 passed, 2 skipped
+python -m pytest -q                # 871 passed, 2 skipped
 python -m pytest tests/test_loop_with_fake_llm.py -q
 python -m pytest tests/test_eval_runner.py tests/test_eval_cli.py -q   # 评测层（不联网）
 python scripts/b4_label_check.py   # 失败模式标签的人工核对，退出码 0 才算过
@@ -382,17 +382,5 @@ mini-claude-code/
 │                                            _evidence.py（五个脚本共用的那支笔）
 ├── docs/                                    experiments · reference · testing · spec-deviations
 │                                            framework-equivalence · inference-bench · mcp-link-spec
-├── skills/ · tests/ · demos/                两个技能 / 877 项测试 / 五个 demo 与它们的证据
-└── review/                                  离线可交互的面试通关之旅（单文件 HTML）
-```
-
-
----
-
-## 12. 可视化学习材料
-
-[`review/miniclaude-interview-guide.html`](review/miniclaude-interview-guide.html) 是一个离线单文件页面，把源码机制做成可交互的东西：CLI → Agent → Tools/LLM 的架构图、Ask → Act → Observe 循环的动画、轮数/token/上下文/停滞四种止损的模拟器、五级权限闸门的攻防演示，以及 110 道面试题的翻卡（每题带源码依据）。双击打开即可，不联网、不要服务器。
-
-```bash
-start review/miniclaude-interview-guide.html
+├── skills/ · tests/ · demos/                两个技能 / 871 项测试 / 五个 demo 与它们的证据
 ```

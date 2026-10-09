@@ -5,7 +5,7 @@
 ## 8. 测试
 
 ```bash
-python -m pytest -q                # 849 passed
+python -m pytest -q                # 871 passed
 python -m pytest tests/test_loop_with_fake_llm.py -q
 python -m pytest tests/test_eval_runner.py tests/test_eval_cli.py -q   # 评测层（不联网）
 python scripts/b4_label_check.py   # 失败模式标签的人工核对，退出码 0 才算过
@@ -20,7 +20,7 @@ python scripts/t3_otlp_export.py  # §7.3-3：24 份已入库轨迹 → OTLP/JSO
 mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 ```
 
-**用哪个解释器跑不是小事**：得用项目的 `.venv`。全局解释器少装了 dev extra 里的官方 `mcp`，`tests/test_mcp_bridge.py` 那条"对端是 SDK 写的服务"就会**静默跳过**，报出来的是 `848 passed, 1 skipped` 而不是 `849 passed` —— 仍然全绿，绿的格数却少一格。同一类能力依赖在证据脚本那边更要紧：拿那个全局解释器跑 `scripts/s14_ext_demo.py`，SDK 那一臂直接没了，而它过去会照旧覆盖掉签着 20/20 的入库证据。**现在这条路被拦住了**（退出码 2、`measured：20 → 17`、文件一个字节不动），五个写证据的脚本共用同一道闸，见 §10 表第 30 行。
+**用哪个解释器跑不是小事**：得用项目的 `.venv`。全局解释器少装了 dev extra 里的官方 `mcp`，`tests/test_mcp_bridge.py` 那条"对端是 SDK 写的服务"就会**静默跳过**，报出来的是 `848 passed, 1 skipped` 而不是 `871 passed` —— 仍然全绿，绿的格数却少一格。同一类能力依赖在证据脚本那边更要紧：拿那个全局解释器跑 `scripts/s14_ext_demo.py`，SDK 那一臂直接没了，而它过去会照旧覆盖掉签着 20/20 的入库证据。**现在这条路被拦住了**（退出码 2、`measured：20 → 17`、文件一个字节不动），五个写证据的脚本共用同一道闸，见 §10 表第 30 行。
 
 | 文件 | 覆盖 |
 |---|---|
@@ -60,7 +60,6 @@ mcc eval --repeats 3               # 24 题 fake 全批，见 §4.6
 | `test_mcp_bridge.py`（44） | §3.7 的三条硬要求逐条钉：远端广告 `read_file` 也覆盖不了本地那个（前缀隔离 + 本地仍读出真磁盘内容）、远端自报 `read`/`destructive` 一律采纳 `execute` 而声明值只做展示、参数校验在**出网之前**（`text=12` 拒、连接还能用）、`MCP_SERVERS` 形状与语义各一个产地、子进程 env 白名单（`LLM_API_KEY` 不透传、点名才给）、握手参数里的密钥不进 trace、服务崩/沉默/吐垃圾各自的原因带 stderr 且 `close()` 后不留子进程、没有 `properties` 的 schema 整条不装配、**官方 SDK `FastMCP` 服务与自写敌意服务两条发现路径共用同一份断言**（中文往返、`TextContent` dataclass 而不是 dict） |
 | `test_skills.py`（21） | 目录与正文分家：5,200 字符正文渲出 3 行目录（**长度与正文无关**这条由测试自己造两个技能量出来，不是看着像）、超预算时宁少列一个技能也不丢掉成本提示、技能名进不了安全字符集就不装（`load_skill` 按名字取，参数里没有路径就没有越界）、同目录别的文件只报名字不读不执行（D20）、frontmatter 手写解析不引 YAML（未闭合的头整篇当正文） |
 | `test_cli_ext.py`（20） | 装配只有一条路径：`build_session` 里 MCP/技能都从 `extra_tools` 进、READONLY 下桥根本不建（`skip_reason` 非空且外部工具为 `[]`）、AUTO 对 `mcp__` 是 ask 而对本地写是 allow、**被拒的远端调用在盘上不留副作用**（写到工作区之外的那个文件不存在、trace 里只有 `permission/deny` 没有 `tool_call`）、授权臂作为对照真落一行、`mcp`/`skills` 两条事件的字段集合与 schema 契约对齐 |
-| `test_hanoi.py`（6） | 外部引入的算法测试，与 Agent 主线无关，保留原样 |
 
 评测层那六个文件用的是 `tests/test_eval_runner.py` 里的**临时玩具题集**（一个算错的 `add`），不依赖 `eval/fixtures` 的 24 道真考题 —— 考题内容改了不需要跟着改测试，而跑批器自己的契约仍然被钉住。真题集只在 `test_eval_taskset.py` 里被结构性地检查（题面不泄漏答案、判据齐不齐）。
 
