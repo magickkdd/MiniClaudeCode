@@ -379,16 +379,20 @@ class Agent:
         empty_replies = 0
         truncated_replies = 0
 
+        # ===== 主循环：一轮轮地「问模型 → 执行工具 → 回填」，直到满足终止条件 =====
         while True:
+            # ① 两道硬闸门：先查轮数上限，再查累计 token 预算
             if self.state.turn >= self.max_turns:
                 return self._finish(TerminationReason.MAX_TURNS)
             if self.state.usage.total >= self.max_total_tokens:
                 self._emit(EventKind.WARNING, reason="token 预算耗尽")
                 return self._finish(TerminationReason.MAX_TURNS)
 
+            # ② 轮数 +1，开始新一轮
             self.state.turn += 1
             # 轮 span 先开：压缩事件属于这一轮，挂在上一轮的 span 下就查不到是谁压的。
             self._turn_span = new_span_id()
+            # ③ 组装本轮 system 提示词（含仓库地图 / 笔记 / 当前 todo）
             map_stamp = self.repo_map.refreshes if self.repo_map is not None else -1
             system = self._system()
             if self.repo_map is not None and self.repo_map.refreshes != map_stamp:
@@ -402,11 +406,13 @@ class Agent:
                     **self.repo_map.stats.as_trace(),
                 )
             specs = self.registry.specs()
+            # ④ 把 system + 工具清单 + 历史拼成一个报文，并估算它的 token 规模
             sent_chars = self.context.wire_chars(system=system, tools=specs, messages=self.messages)
             est_tokens = self.context.estimate_from_chars(sent_chars)
             self._est_tokens.append(est_tokens)
 
             # 先看熔断，再看阶梯：请求已经大到必然被拒时，压缩那点功夫不值得花。
+            # ⑤ 硬熔断：报文已经大到必被端点拒收，就别白费压缩功夫
             if self.context.over_hard_limit(est_tokens):
                 self._emit(
                     EventKind.ERROR,
@@ -422,9 +428,11 @@ class Agent:
                 )
                 return self._finish(TerminationReason.CONTEXT_OVERFLOW)
 
+            # ⑥ 按需启动压缩阶梯（L1 省略 / L2 摘要 / L3 拒绝），返回压缩后的规模
             est_tokens, sent_chars = self._compact_if_needed(system, specs, est_tokens, sent_chars)
             pressure = self.context.pressure_from_chars(sent_chars)
 
+            # ⑦ 压缩之后仍超预算 → 主动停止，避免必然被拒
             if pressure >= self.context.stop_pressure:
                 self._emit(
                     EventKind.ERROR,
@@ -444,6 +452,7 @@ class Agent:
                     message=f"上下文使用率 {pressure:.0%}，压缩阶梯还能撑一会儿，但建议尽快收尾。",
                 )
 
+            # ⑧ 记录本轮开始 & 即将发出的请求（供 trace / 可观测性使用）
             self._trace(
                 "turn_start",
                 span_id=self._turn_span,
@@ -463,6 +472,7 @@ class Agent:
                 est_tokens=est_tokens,
                 prefix_hash=prompt_hash(system + self.messages[0].text()[:PREFIX_SAMPLE_CHARS]),
             )
+            # ⑨ 真正调用模型；LLM 层报错就终止本轮（LLM_FAILURE）
             requested = time.perf_counter()
 
             try:
@@ -480,6 +490,7 @@ class Agent:
                 self._emit(EventKind.ERROR, message=str(exc))
                 return self._finish(TerminationReason.LLM_FAILURE)
 
+            # ⑩ 收到回复：校准 token 估算 + 记账 + 去重 tool_use id + 写入历史
             self.context.calibrate(response.usage.prompt_tokens, sent_chars)
             self.state.record_usage(response.usage)
             self.state.context_peak_tokens = max(self.state.context_peak_tokens, response.usage.prompt_tokens)
@@ -501,6 +512,7 @@ class Agent:
             if text := response.text().strip():
                 self._emit(EventKind.ASSISTANT_TEXT, text=text)
 
+            # ⑪ 没有工具调用？→ 判定完成 / 空回复重试 / 截断处理
             calls = message.tool_uses
             if not calls:
                 if not text:
@@ -522,6 +534,7 @@ class Agent:
                     return self._finish(TerminationReason.STALLED)
                 return self._finish(TerminationReason.COMPLETED)
 
+            # ⑫ 停滞检测：整组调用连续重复 → 判定「原地打转」并终止
             empty_replies = 0
             signature = _signature(calls)
             if signature == stall_signature:
@@ -538,6 +551,7 @@ class Agent:
                 )
                 return self._finish(TerminationReason.STALLED)
 
+            # ⑬ 执行本轮全部工具，把结果打包成一条消息回填
             results, all_denied = self._run_tools(calls)
             self.messages.append(Message.tool_results(results))
 
@@ -560,13 +574,16 @@ class Agent:
         §3.6 的三条副作用纪律也在这里落地：`done_call_ids` 命中就只补记录不执行、
         写完拍检查点、每次有副作用的执行之后落一次现场。
         """
+        # ===== 执行本轮工具：按顺序逐个跑，并把结果逐个回填 =====
         results: list[ToolResultBlock] = []
         executed_any = False
 
+        # ① 遍历本轮每个工具调用（必须顺序执行，保证副作用次序与模型声明一致）
         for call in calls:
             call_span = new_span_id()
             args = call.input if isinstance(call.input, dict) else {}
 
+            # ② 上一段进程已经做过的调用：只补一条说明，绝不再重放副作用
             if call.id and call.id in self._restored_call_ids:
                 # 只有恢复现场后才可能走到这里：这一次调用在上一个进程里已经做完了。
                 # （判据不是 `done_call_ids` —— 那份账本进程也在写，而 id 会被重新发出来，
@@ -587,6 +604,7 @@ class Agent:
                 results.append(ToolResultBlock(tool_use_id=call.id, content=REPLAY_NOTE, is_error=False))
                 continue
 
+            # ③ 查工具注册表：找不到 → 报「虚构工具名」错误
             tool = self.registry.get(call.name)
             elapsed = 0.0
             if tool is None:
@@ -606,6 +624,7 @@ class Agent:
                     decision="deny",
                     rule_hit="unknown-tool",
                 )
+            # ④ 工具存在：先过权限门（放行 / 拒绝）
             else:
                 risk = tool.risk_level.value
                 allowed, reason = self.gate.authorize(tool, call.input)
@@ -619,6 +638,7 @@ class Agent:
                     rule_hit=reason,
                 )
                 self._emit(EventKind.PERMISSION, tool=call.name, allowed=allowed, reason=reason, call=call)
+                # ⑤ 权限放行：执行工具 → 记检查点 → 落现场（三步顺序不能乱）
                 if allowed:
                     executed_any = True
                     executed = True
@@ -642,6 +662,7 @@ class Agent:
                         # 现场必须紧跟副作用：晚一步的崩溃就会把这次写入重放一遍。
                         # 只读工具不触发 —— 重放一次 read_file 什么都不损失。
                         self._save_session()
+                # ⑥ 权限拒绝：转成模型可读的失败说明，让它换条路走
                 else:
                     executed = False
                     self.state.denied_actions += 1
@@ -650,6 +671,7 @@ class Agent:
                         "请不要重复同样的请求；可以改用只读手段继续，或向用户说明你需要什么权限后收尾。"
                     )
 
+            # ⑦ 统计本轮调用：总次数 / 报错数 / 重复数，并做失败模式分类
             ok = not result.is_error
             self.state.tool_calls += 1
             key = (call.name, _key_of(args))
@@ -696,6 +718,7 @@ class Agent:
                 )
                 self._observe_repo_map(call.name, args, ok)
 
+            # ⑧ 截断过长的工具输出，把结果打包成 ToolResultBlock 回填
             results.append(
                 ToolResultBlock(
                     tool_use_id=call.id,
@@ -704,6 +727,7 @@ class Agent:
                 )
             )
 
+            # ⑨ write_todos 成功 → 记录 todo 更新事件
             if call.name == "write_todos" and not result.is_error:
                 self._trace("todo_update", turn=self.state.turn, items=self.todos.snapshot())
                 self._emit(EventKind.TODO_UPDATE, items=self.todos.snapshot())
