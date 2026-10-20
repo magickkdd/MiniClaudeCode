@@ -19,11 +19,32 @@ S13 在这里加了三条同样不可让与的副作用纪律（§3.6）：
 """
 
 # ****************************************************************************
-# 注释分层（本文件统一四层，方便快速定位）
-#   L1 文件大块   = 标题框  → 一、导入与常量 / 二、Agent 核心类 / 三、辅助函数
-#   L2 类内分组   - 三线    → 公共 / 工具 / 检查点与现场 / 内部
-#   L3 方法内阶段 ~ 线      → _drive 四阶段、_run_tools 两阶段
-#   L4 最小说明   普通 #    → ①–⑬ 步骤、行内解释
+# loop.py —— 结构总览（缩进即层级：├── 表并列，└── 表末项）
+#
+# loop.py
+# ├── 一、导入与模块级常量
+# │   ├── 常量与静态文本
+# │   ├── EventKind    事件种类
+# │   └── AgentEvent   推给外界的单条事件
+# ├── 二、Agent 核心类
+# │   ├── 公共         reset · cancel · current_system
+# │   │                run · resume · _begin_run · _ensure_baseline · _dangling_batch
+# │   │                _compact_if_needed · _trace_context_stop · _summarize_history
+# │   ├── _drive       主循环四阶段：A 组上下文 → B 问模型 → C 执行工具 → D 收尾
+# │   ├── 工具         _run_tools（A 执行 / B 全量回填）· _observe_repo_map
+# │   ├── 检查点与现场 _frozen · _checkpoint · _save_session · restore_session
+# │   │                undo_last_write · undo_plan · _undo_target
+# │   └── 内部         _system · _finish · _facts · _cost_est · _closing_text · _emit · _trace
+# └── 三、模块级辅助函数
+#     ├── 停滞签名     _signature · _key_of
+#     ├── 规范化摘要   _plain · _digest · _cap
+#     └── 现场修复     _repairable_tail · _state_from_snapshot
+#
+# 注释分层（四层，与上面的树一一对应）
+#   L1 = 标题框   ── 一 / 二 / 三
+#   L2 = 三线     ── 公共 / 工具 / 检查点与现场 / 内部
+#   L3 = ~ 阶段线 ── _drive A–D、_run_tools A–B
+#   L4 = 普通 #   ── ①–⑬ 步骤与行内解释
 # ****************************************************************************
 # ============================================================================
 # 一、导入与模块级常量
