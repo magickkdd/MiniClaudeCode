@@ -17,6 +17,8 @@ v1 刻意只观测：压缩会改变模型看到的历史，配对一坏端点�
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Literal, Sequence
 
@@ -47,6 +49,58 @@ _SUMMARY_TAG = "[上下文已压缩"
 
 # 只读工具：它们的结果从磁盘重读就能拿回来，所以 L1 省略它们几乎免费。
 _REREADABLE = {"read_file", "search_text", "find_files", "bash", "run_tests"}
+
+# ---- FAEA FBR：诊断感知压缩（MCC-R fork；SPEC_M9 §4.3）--------------------
+# 诊断 JSON 是修复决策的依据，被 L1 当普通大输出剪掉会让 agent 失去"该改哪"的
+# 证据。规则：来源为诊断的内容，最新 2 份保留全文，更早的替换为合成一行摘要。
+_DIAG_DIAGNOSTIC_TOOLS = {"run_episode", "read_diagnostics"}
+_DIAG_FIELD_RX = {
+    key: re.compile(rf'"{key}":\s*([^,\n}}]+)')
+    for key in ("success", "moved_heur", "ever_held", "dropped_heur",
+                "min_eef_surface_dist_m")
+}
+_DIAG_TRY_RX = re.compile(r'"try_index":\s*(\d+)')
+
+
+def _diag_try_index(content: str, tool_name: str, primary_arg: str) -> int | None:
+    """识别"诊断来源"的工具输出并取其中的最大 try_index；非诊断返回 None。"""
+    if '"try_index"' not in content:
+        return None
+    if tool_name in _DIAG_DIAGNOSTIC_TOOLS:
+        pass
+    elif tool_name == "read_file" and "diagnostics_try_" in primary_arg:
+        pass
+    else:
+        return None
+    tries = [int(m) for m in _DIAG_TRY_RX.findall(content)]
+    return max(tries) if tries else None
+
+
+def _diag_summary(content: str, try_index: int) -> str:
+    """把一份（或多份内联）诊断合成一行摘要。字段提取失败时退回首 160 字符。"""
+    try_values = _DIAG_FIELD_RX["success"].findall(content)
+    moved = _DIAG_FIELD_RX["moved_heur"].findall(content)
+    held = _DIAG_FIELD_RX["ever_held"].findall(content)
+    dropped = _DIAG_FIELD_RX["dropped_heur"].findall(content)
+    mind = _DIAG_FIELD_RX["min_eef_surface_dist_m"].findall(content)
+    all_tries = sorted({int(m) for m in _DIAG_TRY_RX.findall(content)})
+    if try_values:
+        head = f"try {','.join(map(str, all_tries)) or try_index}"
+        parts = [
+            head,
+            "success=" + "/".join(v.strip() for v in try_values),
+            f"moved={sum(v.strip() == 'true' for v in moved)}/{len(moved)}",
+            f"held={sum(v.strip() == 'true' for v in held)}/{len(held)}",
+            f"dropped={sum(v.strip() == 'true' for v in dropped)}/{len(dropped)}",
+        ]
+        if mind:
+            try:
+                parts.append("min_dist=" + min(float(v) for v in mind).__format__(".3f"))
+            except ValueError:
+                pass
+        return ("[elided: 诊断(摘要) " + " | ".join(parts)
+                + " —— 全文在 workspace/diagnostics/，用 read_diagnostics 取回]")
+    return "[elided: 诊断输出已省略 —— 全文在 workspace/diagnostics/，用 read_diagnostics 取回] " + content[:160]
 
 
 @dataclass
@@ -302,6 +356,19 @@ class ContextManager:
         target = L1_TARGET_PRESSURE * self.budget * self.chars_per_token
         labels = _call_labels(messages)
         protected = _protection_start(messages, self.keep_recent_rounds)
+        # FAEA FBR：先找出全部"诊断来源"的输出，最新 2 份（按 try_index）豁免剪裁
+        diag_blocks: list[tuple[int, Any]] = []
+        for message in messages:
+            if not message.results:
+                continue
+            for block in message.content:
+                if not isinstance(block, ToolResultBlock):
+                    continue
+                name, arg = labels.get(block.tool_use_id, ("tool", ""))
+                t = _diag_try_index(block.content, name, arg)
+                if t is not None:
+                    diag_blocks.append((t, block))
+        diag_keep = {id(b) for _, b in sorted(diag_blocks, key=lambda x: -x[0])[:2]}
         out: list[Message] = []
         elided = 0
 
@@ -311,6 +378,18 @@ class ContextManager:
                 continue
             blocks: list[Any] = []
             for block in message.content:
+                # 诊断来源：最新 2 份保留全文，更早的换合成摘要（比通用标记保留
+                # 更多决策字段；摘要以 [elided: 开头，重复压缩天然幂等）
+                if isinstance(block, ToolResultBlock) and id(block) not in diag_keep:
+                    name, arg = labels.get(block.tool_use_id, ("tool", ""))
+                    t = _diag_try_index(block.content, name, arg)
+                    if t is not None:
+                        summary = _diag_summary(block.content, t)
+                        if len(summary) < len(block.content):
+                            total_chars += len(summary) - len(block.content)
+                            elided += 1
+                            blocks.append(replace(block, content=summary))
+                            continue
                 marker = _elision_marker(labels.get(block.tool_use_id, ("tool", "")), len(block.content))
                 keep = (
                     not isinstance(block, ToolResultBlock)

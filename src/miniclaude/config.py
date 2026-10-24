@@ -40,6 +40,11 @@ DEFAULTS: dict[str, Any] = {
     # 起不来的服务要在会话开始时就报错，而不是让用户等十分钟才知道配置错了。
     "MCP_TOOL_TIMEOUT": 600,
     "SKILLS_DIR": "skills",          # 技能根目录；不存在就等于没有技能
+    # ---- FAEA FBR 扩展（MCC-R fork；SPEC_M9 §4）。默认关闭 = 行为与上游一致。
+    "FAEA_FBR": 0,                   # 1 = run_episode/read_diagnostics + 领域 prompt + 诊断感知压缩
+    "FAEA_DOMAIN_PROMPT_PATH": "",   # 领域 system prompt 附加块文件路径
+    "FAEA_LIBERO_PYTHON": "",        # run_episode 用的固定仿真解释器
+    "FAEA_DIAG_INDEX": "",           # 诊断哈希索引（沙箱外），read_diagnostics 校验用
 }
 
 # 字符串型旋钮的缺省值与整数型共用 DEFAULTS 这一张表，由 `_str()` 读取。
@@ -96,6 +101,10 @@ class Config:
     mcp_servers: tuple[dict[str, Any], ...] = ()
     mcp_tool_timeout: int = DEFAULTS["MCP_TOOL_TIMEOUT"]
     skills_dir: str = str(DEFAULTS["SKILLS_DIR"])
+    faea_fbr: bool = bool(DEFAULTS["FAEA_FBR"])
+    faea_domain_prompt_path: str = str(DEFAULTS["FAEA_DOMAIN_PROMPT_PATH"])
+    faea_libero_python: str = str(DEFAULTS["FAEA_LIBERO_PYTHON"])
+    faea_diag_index: str = str(DEFAULTS["FAEA_DIAG_INDEX"])
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None) -> "Config":
@@ -173,6 +182,10 @@ class Config:
             mcp_servers=servers,
             mcp_tool_timeout=tool_timeout,
             skills_dir=skills_dir,
+            faea_fbr=bool(_int("FAEA_FBR")),
+            faea_domain_prompt_path=_str("FAEA_DOMAIN_PROMPT_PATH"),
+            faea_libero_python=_str("FAEA_LIBERO_PYTHON"),
+            faea_diag_index=_str("FAEA_DIAG_INDEX"),
         )
 
     @property

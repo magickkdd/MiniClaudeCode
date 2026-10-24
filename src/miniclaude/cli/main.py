@@ -181,6 +181,22 @@ def build_session(
     skill_rows = skills.manifests()
     if skill_rows:
         extra.append(LoadSkillTool(workspace, skills))
+    # FAEA FBR 扩展（MCC-R fork；SPEC_M9 §4）。总开关 FAEA_FBR=1 同时装配
+    # 两个专用工具与领域 prompt，避免"prompt 让模型调不存在的工具"。
+    faea_note = ""
+    if cfg.faea_fbr:
+        from miniclaude.tools.faea_tools import ReadDiagnosticsTool, RunEpisodeTool
+
+        extra.append(RunEpisodeTool(workspace, libero_python=cfg.faea_libero_python))
+        extra.append(ReadDiagnosticsTool(workspace, diag_index_path=cfg.faea_diag_index))
+        if cfg.faea_domain_prompt_path:
+            p = Path(cfg.faea_domain_prompt_path)
+            if not p.is_file():
+                raise ConfigError(
+                    f"FAEA_FBR=1 但 FAEA_DOMAIN_PROMPT_PATH 不存在: {p} —— "
+                    "领域规范缺失会让工具行为失去约束，启动即失败。"
+                )
+            faea_note = "# FAEA episode workflow\n\n" + p.read_text()
     registry = ToolRegistry.default(
         workspace,
         bash_timeout=cfg.bash_timeout,
@@ -206,6 +222,8 @@ def build_session(
         if bridge is not None and any(name.startswith("mcp__") for name in registry.names())
         else ""
     )
+    if faea_note:
+        external_note = (external_note + "\n\n" + faea_note).strip()
 
     def render_system() -> str:
         """整段 system。抽成函数是为了让 Agent 能在写文件之后重画地图，
